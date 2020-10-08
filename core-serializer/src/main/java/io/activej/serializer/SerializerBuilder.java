@@ -194,6 +194,8 @@ public final class SerializerBuilder {
 		builder.setAnnotationHandler(SerializeSubclasses.class, SerializeSubclassesEx.class, new SerializeSubclassesHandler());
 		builder.setAnnotationHandler(SerializeNullable.class, SerializeNullableEx.class, new SerializeNullableHandler());
 		builder.setAnnotationHandler(SerializeStringFormat.class, SerializeStringFormatEx.class, new SerializeStringFormatHandler());
+		builder.setAnnotationHandler(SerializeEndOfMessage.class, SerializeEndOfMessage.class, new SerializeEndOfMessageHandler());
+		builder.setAnnotationHandler(SerializeCustom.class, SerializeCustomEx.class, new SerializeCustomHandler());
 		return builder;
 	}
 

@@ -1,5 +1,7 @@
 package io.activej.serializer;
 
+import io.activej.codegen.expression.Expression;
+import io.activej.codegen.expression.Variable;
 import io.activej.serializer.annotations.*;
 import io.activej.serializer.impl.*;
 import org.jetbrains.annotations.Nullable;
@@ -12,10 +14,12 @@ import java.net.UnknownHostException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static io.activej.serializer.BinarySerializers.*;
 import static io.activej.serializer.Utils.DEFINING_CLASS_LOADER;
 import static io.activej.serializer.Utils.doTest;
 import static java.lang.ClassLoader.getSystemClassLoader;
 import static java.util.Arrays.asList;
+import static java.util.Collections.singleton;
 import static org.junit.Assert.*;
 
 @SuppressWarnings("unused")
@@ -1996,6 +2000,25 @@ public class BinarySerializerTest {
 		assertEquals(100, deserialized.getValue().intValue());
 	}
 
+	@Test
+	public void testWithExplicitEndOfMessage() {
+		BinarySerializer<List<Integer>> serializer = withExplicitEndOfMessage(ofList(INT_SERIALIZER));
+		List<Integer> ints = asList(1, 2, 3, 4, 5);
+
+		byte[] bytes = new byte[100];
+		int len = serializer.encode(bytes, 0, ints);
+		assertEquals(END_OF_MESSAGE_BYTE, bytes[len - 1]);
+		assertEquals(ints, serializer.decode(bytes, 0));
+
+		bytes[len - 1] = 0;
+		try {
+			serializer.decode(bytes, 0);
+			fail();
+		} catch (CorruptedDataException e) {
+			assertEquals("Message does not end with byte '1'", e.getMessage());
+		}
+	}
+
 	public static class TestDataFromVersion3 {
 		@Serialize(order = 0, added = 3)
 		public int a;
@@ -2046,6 +2069,124 @@ public class BinarySerializerTest {
 		testData1 = null;
 		testData2 = doTest(NullableContainer.class, testData1);
 		assertNull(testData2);
+	}
+
+	@SerializeEndOfMessage
+	@SerializeNullable
+	public static class EndOfMessage {
+		@Serialize(order = 0)
+		public byte b;
+	}
+
+	@Test
+	public void testEndOfMessage() {
+		BinarySerializer<EndOfMessage> serializer = SerializerBuilder.create(Utils.DEFINING_CLASS_LOADER).build(EndOfMessage.class);
+		byte[] array = new byte[1000];
+
+		int pos = serializer.encode(array, 0, null);
+		assertEquals(0, array[0]);
+		assertEquals(1, array[1]);
+		assertEquals(2, pos);
+		assertNull(serializer.decode(array, 0));
+
+		EndOfMessage item = new EndOfMessage();
+		item.b = 123;
+		pos = serializer.encode(array, 0, item);
+		assertEquals(1, array[0]);
+		assertEquals(123, array[1]);
+		assertEquals(1, array[2]);
+		assertEquals(3, pos);
+		assertEquals(123, serializer.decode(array, 0).b);
+	}
+
+	public static class MyCustomAnnotationBuilder implements SerializerDefBuilder {
+		@Override
+		public SerializerDef serializer(Class<?> type, SerializerForType[] generics, SerializerDef target) {
+			return new SerializerDefEndOfMessage(target);
+		}
+	}
+
+	@SerializeCustom(MyCustomAnnotationBuilder.class)
+	public static class Custom {
+		@Serialize(order = 0)
+		public byte b;
+	}
+
+	@Test
+	public void testCustom() {
+		BinarySerializer<Custom> serializer = SerializerBuilder.create(Utils.DEFINING_CLASS_LOADER).build(Custom.class);
+		byte[] array = new byte[1000];
+
+		Custom item = new Custom();
+		item.b = 123;
+		int pos = serializer.encode(array, 0, item);
+		assertEquals(123, array[0]);
+		assertEquals(1, array[1]);
+		assertEquals(2, pos);
+		assertEquals(123, serializer.decode(array, 0).b);
+	}
+
+	public static class MyCustomAnnotationBuilder2 implements SerializerDefBuilder {
+		@Override
+		public SerializerDef serializer(Class<?> type, SerializerForType[] generics, SerializerDef target) {
+			SerializerDefEndOfMessage endOfMessage = new SerializerDefEndOfMessage(target);
+			return new ForwardingSerializerDef(endOfMessage) {
+				@Override
+				public Set<Integer> getVersions() {
+					return singleton(10);
+				}
+
+				@Override
+				public boolean isInline(int version, CompatibilityLevel compatibilityLevel) {
+					return (version >= 10 ? endOfMessage : target).isInline(version, compatibilityLevel);
+				}
+
+				@Override
+				public Expression encoder(StaticEncoders staticEncoders, Expression buf, Variable pos, Expression value, int version, CompatibilityLevel compatibilityLevel) {
+					return (version >= 10 ? endOfMessage : target).encoder(staticEncoders, buf, pos, value, version, compatibilityLevel);
+				}
+
+				@Override
+				public Expression decoder(StaticDecoders staticDecoders, Expression in, int version, CompatibilityLevel compatibilityLevel) {
+					return (version >= 10 ? endOfMessage : target).decoder(staticDecoders, in, version, compatibilityLevel);
+				}
+			};
+		}
+	}
+
+	@SerializeCustom(MyCustomAnnotationBuilder2.class)
+	public static class Custom2 {
+		@Serialize(order = 0, added = 1)
+		public byte a;
+		@Serialize(order = 1, added = 2)
+		public byte b;
+	}
+
+	@Test
+	public void testCustom2() {
+		BinarySerializer<Custom2> serializer10 = SerializerBuilder.create(Utils.DEFINING_CLASS_LOADER).build(Custom2.class);
+		byte[] array = new byte[1000];
+
+		Custom2 item = new Custom2();
+		item.a = 123;
+		item.b = -123;
+
+		assertEquals(4, serializer10.encode(array, 0, item));
+		assertEquals(10, array[0]);
+		assertEquals(123, array[1]);
+		assertEquals(-123, array[2]);
+		assertEquals(1, array[3]);
+		assertEquals(123, serializer10.decode(array, 0).a);
+		assertEquals(-123, serializer10.decode(array, 0).b);
+
+		Arrays.fill(array, (byte) 0);
+
+		BinarySerializer<Custom2> serializer1 = SerializerBuilder.create(Utils.DEFINING_CLASS_LOADER).withEncodeVersion(1).build(Custom2.class);
+		assertEquals(2, serializer1.encode(array, 0, item));
+		assertEquals(1, array[0]);
+		assertEquals(123, array[1]);
+		assertEquals(123, serializer1.decode(array, 0).a);
+		assertEquals(0, serializer1.decode(array, 0).b);
 	}
 
 }
