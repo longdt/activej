@@ -40,8 +40,6 @@ public final class ChannelDeserializer<T> extends AbstractStreamSupplier<T> impl
 
 	private final ByteBufQueue queue = new ByteBufQueue();
 
-	private boolean explicitEndOfStream = false;
-
 	private ChannelDeserializer(BinarySerializer<T> valueSerializer) {
 		this.valueSerializer = valueSerializer;
 	}
@@ -51,15 +49,6 @@ public final class ChannelDeserializer<T> extends AbstractStreamSupplier<T> impl
 	 */
 	public static <T> ChannelDeserializer<T> create(BinarySerializer<T> valueSerializer) {
 		return new ChannelDeserializer<>(valueSerializer);
-	}
-
-	public ChannelDeserializer<T> withExplicitEndOfStream() {
-		return withExplicitEndOfStream(true);
-	}
-
-	public ChannelDeserializer<T> withExplicitEndOfStream(boolean explicitEndOfStream) {
-		this.explicitEndOfStream = explicitEndOfStream;
-		return this;
 	}
 
 	@Override
@@ -74,10 +63,8 @@ public final class ChannelDeserializer<T> extends AbstractStreamSupplier<T> impl
 	protected void onResumed() {
 		asyncBegin();
 
-		final boolean endOfStream;
-
 		try {
-			endOfStream = process();
+			process();
 		} catch (CorruptedDataException e) {
 			closeEx(new ParseException(ChannelDeserializer.class, "Data is corrupted", e));
 			return;
@@ -86,38 +73,13 @@ public final class ChannelDeserializer<T> extends AbstractStreamSupplier<T> impl
 			return;
 		}
 
-		if (endOfStream) {
-			assert queue.hasRemainingBytes(1);
-			queue.skip(1);
-
-			if (!explicitEndOfStream) {
-				closeEx(new UnknownFormatException(ChannelDeserializer.class, format("Unexpected end-of-stream, %s : %s", this, queue)));
-				return;
-			}
-
-			if (queue.hasRemaining()) {
-				closeEx(new UnknownFormatException(ChannelDeserializer.class, format("Unexpected data after end-of-stream, %s : %s", this, queue)));
-				return;
-			}
-		}
-
 		if (isReady()) {
 			input.get()
 					.whenResult(buf -> {
 						if (buf != null) {
-							if (endOfStream) {
-								buf.recycle();
-								closeEx(new UnknownFormatException(ChannelDeserializer.class, format("Unexpected data after end-of-stream, %s : %s", this, queue)));
-								return;
-							}
 							queue.add(buf);
 							asyncResume();
 						} else {
-							if (explicitEndOfStream && !endOfStream) {
-								closeEx(new UnknownFormatException(ChannelDeserializer.class, format("Explicit end-of-stream is missing, %s : %s", this, queue)));
-								return;
-							}
-
 							if (queue.isEmpty()) {
 								sendEndOfStream();
 							} else {
@@ -131,7 +93,7 @@ public final class ChannelDeserializer<T> extends AbstractStreamSupplier<T> impl
 		}
 	}
 
-	private boolean process() {
+	private void process() {
 		ByteBuf firstBuf;
 		while (isReady() && (firstBuf = queue.peekBuf()) != null) {
 			int firstBufRemaining = firstBuf.readRemaining();
@@ -141,12 +103,11 @@ public final class ChannelDeserializer<T> extends AbstractStreamSupplier<T> impl
 				byte b = array[pos];
 				int messageSize;
 				int headerSize;
-				if (b > 0) {
+				if (b >= 0) {
 					messageSize = b + 1;
 					headerSize = 1;
 				} else {
 					int encodedSize = readEncodedSize(array, pos, b);
-					if (encodedSize == 0) return true;
 					messageSize = encodedSize & 0x0FFFFFFF;
 					headerSize = encodedSize >>> 28;
 				}
@@ -163,22 +124,17 @@ public final class ChannelDeserializer<T> extends AbstractStreamSupplier<T> impl
 				}
 			}
 
-			int r = doProcess();
-			if (r == 0) return true;
-			if (r < 0) break;
+			if (!doProcess()) break;
 		}
-
-		return false;
 	}
 
-	private int doProcess() {
+	private boolean doProcess() {
 		int encodedSize = readEncodedSize();
-		if (encodedSize == 0) return 0;
 		int messageSize = encodedSize & 0x0FFFFFFF;
 		int headerSize = encodedSize >>> 28;
 
 		if (!queue.hasRemainingBytes(messageSize)) {
-			return -1;
+			return false;
 		}
 
 		queue.consume(messageSize, buf -> {
@@ -186,40 +142,37 @@ public final class ChannelDeserializer<T> extends AbstractStreamSupplier<T> impl
 			send(item);
 		});
 
-		return 1;
+		return true;
 	}
 
 	private static int readEncodedSize(byte[] array, int pos, byte b) {
-		if (b < 0) {
-			int dataSize = b & 0x7f;
-			b = array[pos + 1];
+		assert b <= 0;
+		int dataSize = b & 0x7f;
+		b = array[pos + 1];
+		if (b >= 0) {
+			dataSize += (b << 7);
+			return dataSize + 2 + (2 << 28);
+		} else {
+			dataSize += ((b & 0x7f) << 7);
+			b = array[pos + 2];
 			if (b >= 0) {
-				dataSize += (b << 7);
-				return dataSize + 2 + (2 << 28);
+				dataSize += (b << 14);
+				return dataSize + 3 + (3 << 28);
 			} else {
-				dataSize += ((b & 0x7f) << 7);
-				b = array[pos + 2];
+				dataSize += ((b & 0x7f) << 14);
+				b = array[pos + 3];
 				if (b >= 0) {
-					dataSize += (b << 14);
-					return dataSize + 3 + (3 << 28);
-				} else {
-					dataSize += ((b & 0x7f) << 14);
-					b = array[pos + 3];
-					if (b >= 0) {
-						dataSize += (b << 21);
-						return dataSize + 4 + (4 << 28);
-					}
-					throw new AssertionError("Invalid header size");
+					dataSize += (b << 21);
+					return dataSize + 4 + (4 << 28);
 				}
+				throw new AssertionError("Invalid header size");
 			}
 		}
-		return 0;
 	}
 
 	private int readEncodedSize() {
 		byte b = queue.peekByte();
-		if (b > 0) return b + 1 + (1 << 28);
-		if (b == 0) return 0;
+		if (b >= 0) return b + 1 + (1 << 28);
 		if (queue.hasRemainingBytes(2)) {
 			int dataSize = b & 0x7f;
 			b = queue.peekByte(1);

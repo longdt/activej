@@ -65,7 +65,6 @@ public final class ChannelSerializer<T> extends AbstractStreamConsumer<T> implem
 	private final BinarySerializer<T> serializer;
 
 	private MemSize initialBufferSize = DEFAULT_INITIAL_BUFFER_SIZE;
-	private boolean explicitEndOfStream = false;
 
 	@Nullable
 	private Duration autoFlushInterval;
@@ -128,15 +127,6 @@ public final class ChannelSerializer<T> extends AbstractStreamConsumer<T> implem
 		return this;
 	}
 
-	public ChannelSerializer<T> withExplicitEndOfStream() {
-		return withExplicitEndOfStream(true);
-	}
-
-	public ChannelSerializer<T> withExplicitEndOfStream(boolean explicitEndOfStream) {
-		this.explicitEndOfStream = explicitEndOfStream;
-		return this;
-	}
-
 	@Override
 	public ChannelOutput<ByteBuf> getOutput() {
 		return output -> {
@@ -189,10 +179,7 @@ public final class ChannelSerializer<T> extends AbstractStreamConsumer<T> implem
 			if (isEndOfStream()) {
 				flushing = true;
 				Promise.complete()
-						.then(() ->
-								explicitEndOfStream ?
-										output.accept(ByteBuf.wrapForReading(new byte[]{0})) :
-										Promise.complete())
+						.then(() -> (Promise<? extends Void>) Promise.complete())
 						.then(output::acceptEndOfStream)
 						.whenResult(this::acknowledge);
 			} else {
