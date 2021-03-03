@@ -33,6 +33,10 @@
       <groupId>com.google.code.gson</groupId>
       <artifactId>gson</artifactId>
     </dependency>
+    <dependency>
+      <groupId>com.dslplatform</groupId>
+      <artifactId>dsl-json</artifactId>
+    </dependency>
   </dependencies>
 
   <build>

@@ -16,20 +16,24 @@
 
 package io.activej.codec.json;
 
-import com.google.gson.internal.Streams;
+import com.dslplatform.json.DslJson;
+import com.dslplatform.json.JsonWriter;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;
-import com.google.gson.stream.JsonWriter;
 import com.google.gson.stream.MalformedJsonException;
 import io.activej.bytebuf.ByteBuf;
-import io.activej.bytebuf.util.ByteBufWriter;
-import io.activej.codec.*;
+import io.activej.codec.StructuredCodec;
+import io.activej.codec.StructuredDecoder;
+import io.activej.codec.StructuredEncoder;
 import io.activej.common.exception.MalformedDataException;
 import io.activej.common.exception.UncheckedException;
 
-import java.io.*;
+import java.io.EOFException;
+import java.io.IOException;
+import java.io.StringReader;
 
 public class JsonUtils {
+	private static final DslJson<?> DSL_JSON = new DslJson<>();
 
 	public static <T> T fromJson(StructuredDecoder<T> decoder, String string) throws MalformedDataException {
 		JsonReader reader = new JsonReader(new StringReader(string));
@@ -52,38 +56,37 @@ public class JsonUtils {
 		return result;
 	}
 
-	private static <T> void toJson(StructuredEncoder<T> encoder, T value, Writer writer) {
-		JsonWriterEx jsonWriter = new JsonWriterEx(writer);
-		jsonWriter.setLenient(true);
-		jsonWriter.setIndentEx("");
-		jsonWriter.setHtmlSafe(false);
-		jsonWriter.setSerializeNulls(true);
+	private static <T> JsonWriter createJsonWriter(StructuredEncoder<T> encoder, T value) {
+		JsonWriter jsonWriter = DSL_JSON.newWriter();
 		encoder.encode(new JsonStructuredOutput(jsonWriter), value);
+		return jsonWriter;
 	}
 
 	public static <T> String toJson(StructuredEncoder<? super T> encoder, T value) {
-		StringWriter writer = new StringWriter();
-		toJson(encoder, value, writer);
-		return writer.toString();
+		return createJsonWriter(encoder, value).toString();
 	}
 
 	public static <T> ByteBuf toJsonBuf(StructuredEncoder<? super T> encoder, T value) {
-		ByteBufWriter writer = new ByteBufWriter();
-		toJson(encoder, value, writer);
-		return writer.getBuf();
+		JsonWriter writer = createJsonWriter(encoder, value);
+		return ByteBuf.wrap(writer.getByteBuffer(), 0, writer.size());
 	}
 
 	/**
 	 * Encodes a given value as a JSON using {@link StructuredEncoder} and appends the result to the {@link Appendable}.
 	 * Passed {@link Appendable} should not perform any blocking I/O operations
 	 *
-	 * @param encoder structured encoder
-	 * @param value a value to be encoded to JSON
+	 * @param encoder    structured encoder
+	 * @param value      a value to be encoded to JSON
 	 * @param appendable nonblocking appendable where an encoded as json value will be appended
-	 * @param <T> type of value to be encoded
+	 * @param <T>        type of value to be encoded
 	 */
 	public static <T> void toJson(StructuredEncoder<? super T> encoder, T value, Appendable appendable) {
-		toJson(encoder, value, Streams.writerForAppendable(appendable));
+		String json = createJsonWriter(encoder, value).toString();
+		try {
+			appendable.append(json);
+		} catch (IOException e) {
+			throw new AssertionError();
+		}
 	}
 
 	public static <T> StructuredCodec<T> oneline(StructuredCodec<T> codec) {
@@ -91,55 +94,28 @@ public class JsonUtils {
 	}
 
 	public static <T> StructuredCodec<T> indent(StructuredCodec<T> codec, String indent) {
-		return new StructuredCodec<T>() {
-			@Override
-			public void encode(StructuredOutput out, T item) {
-				if (out instanceof JsonStructuredOutput) {
-					JsonStructuredOutput jsonOut = ((JsonStructuredOutput) out);
-					if (jsonOut.writer instanceof JsonWriterEx) {
-						JsonWriterEx jsonWriterEx = (JsonWriterEx) jsonOut.writer;
-						String previousIndent = jsonWriterEx.getIndentEx();
-						jsonWriterEx.setIndentEx(indent);
-						if (indent.isEmpty()) {
-							try {
-								jsonWriterEx.writer.write('\n');
-							} catch (IOException e) {
-								throw new AssertionError();
-							}
-						}
-						codec.encode(out, item);
-						jsonWriterEx.setIndentEx(previousIndent);
-						return;
-					}
-				}
-				codec.encode(out, item);
-			}
-
-			@Override
-			public T decode(StructuredInput in) throws MalformedDataException {
-				return codec.decode(in);
-			}
-		};
+		// TODO eduard: add proper indent
+		return codec;
 	}
 
-	public static final class JsonWriterEx extends JsonWriter {
-		final Writer writer;
-
-		public JsonWriterEx(Writer writer) {
-			super(writer);
-			this.writer = writer;
-		}
-
-		private String indentEx;
-
-		public final void setIndentEx(String indent) {
-			this.indentEx = indent;
-			setIndent(indent);
-		}
-
-		public final String getIndentEx() {
-			return indentEx;
-		}
-	}
+//	public static final class JsonWriterEx extends JsonWriter {
+//		final Writer writer;
+//
+//		public JsonWriterEx(Writer writer) {
+//			super(writer);
+//			this.writer = writer;
+//		}
+//
+//		private String indentEx;
+//
+//		public final void setIndentEx(String indent) {
+//			this.indentEx = indent;
+//			setIndent(indent);
+//		}
+//
+//		public final String getIndentEx() {
+//			return indentEx;
+//		}
+//	}
 
 }

@@ -16,20 +16,30 @@
 
 package io.activej.codec.json;
 
-import com.google.gson.stream.JsonWriter;
+import com.dslplatform.json.BinaryConverter;
+import com.dslplatform.json.BoolConverter;
+import com.dslplatform.json.JsonWriter;
+import com.dslplatform.json.NumberConverter;
 import io.activej.codec.StructuredCodecs;
 import io.activej.codec.StructuredEncoder;
 import io.activej.codec.StructuredOutput;
+import io.activej.common.Checks;
 
-import java.io.IOException;
 import java.lang.reflect.Type;
 import java.util.Arrays;
-import java.util.Base64;
+import java.util.BitSet;
 import java.util.List;
 import java.util.Map;
 
+import static io.activej.common.Checks.checkState;
+
 public class JsonStructuredOutput implements StructuredOutput {
-	final JsonWriter writer;
+	private static final boolean CHECK = Checks.isEnabled(JsonStructuredOutput.class);
+
+	private final JsonWriter writer;
+
+	private final BitSet nestedBitSet = new BitSet(0);
+	private int bitSetIndex = -2;
 
 	/**
 	 * Constructs a new {@link JsonStructuredOutput}
@@ -43,110 +53,74 @@ public class JsonStructuredOutput implements StructuredOutput {
 
 	@Override
 	public void writeBoolean(boolean value) {
-		try {
-			writer.value(value);
-		} catch (IOException ignored) {
-			throw new AssertionError();
-		}
+		beforeWrite();
+		BoolConverter.serialize(value, writer);
 	}
 
 	@Override
 	public void writeByte(byte value) {
-		try {
-			writer.value(value & 0xFF);
-		} catch (IOException ignored) {
-			throw new AssertionError();
-		}
+		beforeWrite();
+		writer.writeByte(value);
 	}
 
 	@Override
 	public void writeInt(int value) {
-		try {
-			writer.value(value);
-		} catch (IOException ignored) {
-			throw new AssertionError();
-		}
+		beforeWrite();
+		NumberConverter.serialize(value, writer);
 	}
 
 	@Override
 	public void writeLong(long value) {
-		try {
-			writer.value(value);
-		} catch (IOException ignored) {
-			throw new AssertionError();
-		}
+		beforeWrite();
+		NumberConverter.serialize(value, writer);
 	}
 
 	@Override
 	public void writeInt32(int value) {
-		try {
-			writer.value(value);
-		} catch (IOException ignored) {
-			throw new AssertionError();
-		}
+		beforeWrite();
+		NumberConverter.serialize(value, writer);
 	}
 
 	@Override
 	public void writeLong64(long value) {
-		try {
-			writer.value(value);
-		} catch (IOException ignored) {
-			throw new AssertionError();
-		}
+		beforeWrite();
+		NumberConverter.serialize(value, writer);
 	}
 
 	@Override
 	public void writeFloat(float value) {
-		try {
-			writer.value(value);
-		} catch (IOException ignored) {
-			throw new AssertionError();
-		}
+		beforeWrite();
+		NumberConverter.serialize(value, writer);
 	}
 
 	@Override
 	public void writeDouble(double value) {
-		try {
-			writer.value(value);
-		} catch (IOException ignored) {
-			throw new AssertionError();
-		}
+		beforeWrite();
+		NumberConverter.serialize(value, writer);
 	}
 
 	@Override
 	public void writeBytes(byte[] bytes, int off, int len) {
-		try {
-			writer.value(Base64.getEncoder().encodeToString(Arrays.copyOfRange(bytes, off, off + len)));
-		} catch (IOException ignored) {
-			throw new AssertionError();
-		}
+		beforeWrite();
+		BinaryConverter.serialize(Arrays.copyOfRange(bytes, off, off + len), writer);
 	}
 
 	@Override
 	public void writeBytes(byte[] bytes) {
-		try {
-			writer.value(Base64.getEncoder().encodeToString(bytes));
-		} catch (IOException ignored) {
-			throw new AssertionError();
-		}
+		beforeWrite();
+		BinaryConverter.serialize(bytes, writer);
 	}
 
 	@Override
 	public void writeString(String value) {
-		try {
-			writer.value(value);
-		} catch (IOException ignored) {
-			throw new AssertionError();
-		}
+		beforeWrite();
+		writer.writeString(value);
 	}
 
 	@Override
 	public void writeNull() {
-		try {
-			writer.nullValue();
-		} catch (IOException ignored) {
-			throw new AssertionError();
-		}
+		beforeWrite();
+		writer.writeNull();
 	}
 
 	@Override
@@ -160,75 +134,106 @@ public class JsonStructuredOutput implements StructuredOutput {
 
 	@Override
 	public <T> void writeList(StructuredEncoder<T> encoder, List<T> list) {
-		try {
-			writer.beginArray();
-			for (T item : list) {
-				encoder.encode(this, item);
-			}
-			writer.endArray();
-		} catch (IOException ignored) {
-			throw new AssertionError();
+		beforeWrite();
+		beginArray();
+		for (T item : list) {
+			encoder.encode(this, item);
 		}
+		endArray();
 	}
 
 	@Override
 	public <K, V> void writeMap(StructuredEncoder<K> keyEncoder, StructuredEncoder<V> valueEncoder, Map<K, V> map) {
-		try {
-			if (keyEncoder == StructuredCodecs.STRING_CODEC) {
-				writer.beginObject();
-				for (Map.Entry<K, V> entry : map.entrySet()) {
-					writer.name((String) entry.getKey());
-					valueEncoder.encode(this, entry.getValue());
-				}
-				writer.endObject();
-			} else {
-				writer.beginArray();
-				for (Map.Entry<K, V> entry : map.entrySet()) {
-					writer.beginArray();
-					keyEncoder.encode(this, entry.getKey());
-					valueEncoder.encode(this, entry.getValue());
-					writer.endArray();
-				}
-				writer.endArray();
+		beforeWrite();
+		if (keyEncoder == StructuredCodecs.STRING_CODEC) {
+			beginObject();
+			for (Map.Entry<K, V> entry : map.entrySet()) {
+				writeKey((String) entry.getKey());
+				valueEncoder.encode(this, entry.getValue());
 			}
-		} catch (IOException ignored) {
-			throw new AssertionError();
+			endObject();
+		} else {
+			beginArray();
+			for (Map.Entry<K, V> entry : map.entrySet()) {
+				beforeWrite();
+				beginArray();
+				keyEncoder.encode(this, entry.getKey());
+				valueEncoder.encode(this, entry.getValue());
+				endArray();
+			}
+			endArray();
 		}
 	}
 
 	@Override
 	public <T> void writeTuple(StructuredEncoder<T> encoder, T value) {
-		try {
-			writer.beginArray();
-			encoder.encode(this, value);
-			writer.endArray();
-		} catch (IOException ignored) {
-			throw new AssertionError();
-		}
+		beforeWrite();
+		beginArray();
+		encoder.encode(this, value);
+		endArray();
 	}
 
 	@Override
 	public <T> void writeObject(StructuredEncoder<T> encoder, T value) {
-		try {
-			writer.beginObject();
-			encoder.encode(this, value);
-			writer.endObject();
-		} catch (IOException ignored) {
-			throw new AssertionError();
-		}
+		beforeWrite();
+		beginObject();
+		encoder.encode(this, value);
+		endObject();
 	}
 
 	@Override
 	public void writeKey(String field) {
-		try {
-			writer.name(field);
-		} catch (IOException ignored) {
-			throw new AssertionError();
+		if (CHECK) checkState(bitSetIndex >= 0 && nestedBitSet.get(bitSetIndex), "Writing keys outside object");
+
+		int index = bitSetIndex + 1;
+		if (nestedBitSet.get(index)) {
+			writer.writeByte(JsonWriter.COMMA);
+		} else {
+			nestedBitSet.set(index);
 		}
+
+		writer.writeString(field);
+		writer.writeByte(JsonWriter.SEMI);
 	}
 
 	@Override
 	public <T> void writeCustom(Type type, T value) {
 		throw new UnsupportedOperationException("No custom type writers");
+	}
+
+	private void beforeWrite() {
+		if (bitSetIndex >= 0) {
+			if (!nestedBitSet.get(bitSetIndex)) {
+				int index = bitSetIndex + 1;
+				if (nestedBitSet.get(index)) {
+					writer.writeByte(JsonWriter.COMMA);
+				} else {
+					nestedBitSet.set(index);
+				}
+			}
+		}
+	}
+
+	private void beginArray() {
+		writer.writeByte(JsonWriter.ARRAY_START);
+		bitSetIndex += 2;
+	}
+
+	private void endArray() {
+		writer.writeByte(JsonWriter.ARRAY_END);
+		nestedBitSet.clear(bitSetIndex + 1);
+		bitSetIndex -= 2;
+	}
+
+	private void beginObject() {
+		writer.writeByte(JsonWriter.OBJECT_START);
+		bitSetIndex += 2;
+		nestedBitSet.set(bitSetIndex);
+	}
+
+	private void endObject() {
+		writer.writeByte(JsonWriter.OBJECT_END);
+		nestedBitSet.clear(bitSetIndex, bitSetIndex + 2);
+		bitSetIndex -= 2;
 	}
 }
