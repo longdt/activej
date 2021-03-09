@@ -16,15 +16,12 @@
 
 package io.activej.codec.json;
 
-import com.google.gson.stream.JsonReader;
-import com.google.gson.stream.JsonToken;
-import com.google.gson.stream.MalformedJsonException;
+import com.dslplatform.json.*;
 import io.activej.codec.StructuredDecoder;
 import io.activej.codec.StructuredInput;
 import io.activej.common.exception.MalformedDataException;
 import io.activej.common.exception.UncheckedException;
 
-import java.io.EOFException;
 import java.io.IOException;
 import java.lang.reflect.Type;
 import java.util.*;
@@ -33,7 +30,8 @@ import static io.activej.codec.StructuredCodecs.STRING_CODEC;
 import static io.activej.codec.StructuredInput.Token.*;
 
 public final class JsonStructuredInput implements StructuredInput {
-	private final JsonReader reader;
+	private final JsonReader<?> reader;
+	private int nested = 0;
 
 	/**
 	 * Constructs a new {@link JsonStructuredInput}
@@ -41,15 +39,17 @@ public final class JsonStructuredInput implements StructuredInput {
 	 *
 	 * @param reader nonblocking {@link JsonReader}
 	 */
-	public JsonStructuredInput(JsonReader reader) {
+	public JsonStructuredInput(JsonReader<?> reader) {
 		this.reader = reader;
 	}
 
 	@Override
 	public boolean readBoolean() throws MalformedDataException {
 		try {
-			return reader.nextBoolean();
-		} catch (EOFException | MalformedJsonException | IllegalStateException e) {
+			boolean result = BoolConverter.deserialize(reader);
+			afterRead();
+			return result;
+		} catch (ParsingException e) {
 			throw new MalformedDataException(e);
 		} catch (IOException e) {
 			throw new AssertionError();
@@ -60,14 +60,17 @@ public final class JsonStructuredInput implements StructuredInput {
 	public byte readByte() throws MalformedDataException {
 		int n = readInt();
 		if (n != (n & 0xFF)) throw new MalformedDataException("Expected byte, but was: " + n);
+		afterRead();
 		return (byte) n;
 	}
 
 	@Override
 	public int readInt() throws MalformedDataException {
 		try {
-			return reader.nextInt();
-		} catch (EOFException | MalformedJsonException | NumberFormatException | IllegalStateException e) {
+			int result = NumberConverter.deserializeInt(reader);
+			afterRead();
+			return result;
+		} catch (ParsingException e) {
 			throw new MalformedDataException(e);
 		} catch (IOException e) {
 			throw new AssertionError();
@@ -77,8 +80,10 @@ public final class JsonStructuredInput implements StructuredInput {
 	@Override
 	public long readLong() throws MalformedDataException {
 		try {
-			return reader.nextLong();
-		} catch (EOFException | MalformedJsonException | NumberFormatException | IllegalStateException e) {
+			long result = NumberConverter.deserializeLong(reader);
+			afterRead();
+			return result;
+		} catch (ParsingException e) {
 			throw new MalformedDataException(e);
 		} catch (IOException e) {
 			throw new AssertionError();
@@ -97,14 +102,24 @@ public final class JsonStructuredInput implements StructuredInput {
 
 	@Override
 	public float readFloat() throws MalformedDataException {
-		return (float) readDouble();
+		try {
+			float result = NumberConverter.deserializeFloat(reader);
+			afterRead();
+			return result;
+		} catch (ParsingException e) {
+			throw new MalformedDataException(e);
+		} catch (IOException e) {
+			throw new AssertionError();
+		}
 	}
 
 	@Override
 	public double readDouble() throws MalformedDataException {
 		try {
-			return reader.nextDouble();
-		} catch (EOFException | MalformedJsonException | NumberFormatException | IllegalStateException e) {
+			double result = NumberConverter.deserializeDouble(reader);
+			afterRead();
+			return result;
+		} catch (ParsingException e) {
 			throw new MalformedDataException(e);
 		} catch (IOException e) {
 			throw new AssertionError();
@@ -114,17 +129,23 @@ public final class JsonStructuredInput implements StructuredInput {
 	@Override
 	public byte[] readBytes() throws MalformedDataException {
 		try {
-			return Base64.getDecoder().decode(readString());
-		} catch (IllegalArgumentException e) {
+			byte[] result = BinaryConverter.deserialize(reader);
+			afterRead();
+			return result;
+		} catch (ParsingException e) {
 			throw new MalformedDataException(e);
+		} catch (IOException e) {
+			throw new AssertionError();
 		}
 	}
 
 	@Override
 	public String readString() throws MalformedDataException {
 		try {
-			return reader.nextString();
-		} catch (EOFException | NumberFormatException | MalformedJsonException | IllegalStateException e) {
+			String result = reader.readString();
+			afterRead();
+			return result;
+		} catch (ParsingException e) {
 			throw new MalformedDataException(e);
 		} catch (IOException e) {
 			throw new AssertionError();
@@ -134,55 +155,78 @@ public final class JsonStructuredInput implements StructuredInput {
 	@Override
 	public void readNull() throws MalformedDataException {
 		try {
-			reader.nextNull();
-		} catch (EOFException | MalformedJsonException | IllegalStateException e) {
+			if (!reader.wasNull()) {
+				throw new MalformedDataException("Was not 'null'");
+			}
+			afterRead();
+		} catch (ParsingException e) {
 			throw new MalformedDataException(e);
-		} catch (IOException e) {
-			throw new AssertionError();
 		}
 	}
 
 	@Override
 	public <T> T readNullable(StructuredDecoder<T> decoder) throws MalformedDataException {
 		try {
-			if (reader.peek() == JsonToken.NULL) {
-				reader.nextNull();
+			if (reader.wasNull()) {
+				afterRead();
 				return null;
 			}
 			return decoder.decode(this);
-		} catch (EOFException | MalformedJsonException | IllegalStateException e) {
+		} catch (ParsingException e) {
 			throw new MalformedDataException(e);
 		} catch (UncheckedException e) {
 			throw e.propagate(MalformedDataException.class);
-		} catch (IOException e) {
-			throw new AssertionError();
 		}
 	}
 
 	@Override
 	public <T> T readTuple(StructuredDecoder<T> decoder) throws MalformedDataException {
 		try {
-			reader.beginArray();
+			beginArray();
+			reader.getNextToken();
+			nested++;
+
 			T result = decoder.decode(this);
-			reader.endArray();
+			reader.checkArrayEnd();
+
+			afterRead();
+
 			return result;
-		} catch (EOFException | MalformedJsonException | IllegalStateException e) {
-			throw new MalformedDataException(e);
 		} catch (UncheckedException e) {
 			throw e.propagate(MalformedDataException.class);
+		} catch (ParsingException e) {
+			throw new MalformedDataException(e);
 		} catch (IOException e) {
 			throw new AssertionError();
+		}
+	}
+
+	private void beginArray() throws MalformedDataException {
+		if (reader.last() != '[') {
+			throw new MalformedDataException("JSON array expected");
+		}
+	}
+
+	private void beginObject() throws MalformedDataException {
+		if (reader.last() != '{') {
+			throw new MalformedDataException("JSON object expected");
 		}
 	}
 
 	@Override
 	public <T> T readObject(StructuredDecoder<T> decoder) throws MalformedDataException {
 		try {
-			reader.beginObject();
+			beginObject();
+			nested++;
+			reader.getNextToken();
+
 			T result = decoder.decode(this);
-			reader.endObject();
+
+			reader.checkObjectEnd();
+			afterRead();
+
 			return result;
-		} catch (EOFException | MalformedJsonException | IllegalStateException e) {
+		} catch (ParsingException e) {
 			throw new MalformedDataException(e);
 		} catch (UncheckedException e) {
 			throw e.propagate(MalformedDataException.class);
@@ -195,48 +239,62 @@ public final class JsonStructuredInput implements StructuredInput {
 	public <T> List<T> readList(StructuredDecoder<T> decoder) throws MalformedDataException {
 		try {
 			List<T> list = new ArrayList<>();
-			reader.beginArray();
-			while (reader.hasNext()) {
-				T item = decoder.decode(this);
-				list.add(item);
+			beginArray();
+			if (reader.getNextToken() == ']') return Collections.emptyList();
+
+			int i = ++nested;
+
+			while (nested >= i) {
+				list.add(decoder.decode(this));
 			}
-			reader.endArray();
+
+			afterRead();
+
 			return list;
-		} catch (EOFException | MalformedJsonException | IllegalStateException e) {
-			throw new MalformedDataException(e);
 		} catch (UncheckedException e) {
 			throw e.propagate(MalformedDataException.class);
+		} catch (ParsingException e) {
+			throw new MalformedDataException(e);
 		} catch (IOException e) {
 			throw new AssertionError();
 		}
 	}
 
+
 	@SuppressWarnings("unchecked")
 	@Override
-	public <K, V> Map<K, V> readMap(StructuredDecoder<K> keyDecoder, StructuredDecoder<V> valueDecoder) throws MalformedDataException {
+	public <K, V> Map<K, V> readMap(StructuredDecoder<K> keyDecoder, StructuredDecoder<V> valueDecoder) throws
+			MalformedDataException {
 		try {
-			Map<K, V> map = new LinkedHashMap<>();
 			if (keyDecoder == STRING_CODEC) {
-				reader.beginObject();
-				while (reader.hasNext()) {
-					K key = (K) reader.nextName();
+				beginObject();
+
+				if (reader.getNextToken() == ']') return Collections.emptyMap();
+
+				Map<K, V> map = new LinkedHashMap<>();
+
+				int i = ++nested;
+				while (nested >= i) {
+					K key = (K) reader.readKey();
 					V value = valueDecoder.decode(this);
 					map.put(key, value);
 				}
-				reader.endObject();
+				reader.checkObjectEnd();
+				return map;
 			} else {
-				reader.beginArray();
-				while (reader.hasNext()) {
-					reader.beginArray();
-					K key = keyDecoder.decode(this);
-					V value = valueDecoder.decode(this);
-					map.put(key, value);
-					reader.endArray();
-				}
+				Map<K, V> map = new LinkedHashMap<>();
+				reader.startArray();
+//				while (reader.hasNext()) {
+				reader.startArray();
+				K key = keyDecoder.decode(this);
+				V value = valueDecoder.decode(this);
+				map.put(key, value);
 				reader.endArray();
+//				}
+				reader.endArray();
+				return map;
 			}
-			return map;
-		} catch (EOFException | NumberFormatException | MalformedJsonException | IllegalStateException e) {
+		} catch (ParsingException e) {
 			throw new MalformedDataException(e);
 		} catch (UncheckedException e) {
 			throw e.propagate(MalformedDataException.class);
@@ -247,21 +305,15 @@ public final class JsonStructuredInput implements StructuredInput {
 
 	@Override
 	public boolean hasNext() throws MalformedDataException {
-		try {
-			JsonToken token = reader.peek();
-			return token != JsonToken.END_ARRAY && token != JsonToken.END_OBJECT;
-		} catch (EOFException | MalformedJsonException e) {
-			throw new MalformedDataException(e);
-		} catch (IOException e) {
-			throw new AssertionError();
-		}
+		byte token = reader.last();
+		return token != JsonWriter.ARRAY_END && token != JsonWriter.OBJECT_END;
 	}
 
 	@Override
 	public String readKey() throws MalformedDataException {
 		try {
-			return reader.nextName();
-		} catch (EOFException | NumberFormatException | MalformedJsonException | IllegalStateException e) {
+			return reader.readKey();
+		} catch (ParsingException e) {
 			throw new MalformedDataException(e);
 		} catch (IOException e) {
 			throw new AssertionError();
@@ -276,31 +328,41 @@ public final class JsonStructuredInput implements StructuredInput {
 
 	@Override
 	public EnumSet<Token> getNext() throws MalformedDataException {
-		JsonToken jsonToken;
-		try {
-			jsonToken = reader.peek();
-		} catch (EOFException | MalformedJsonException e) {
-			throw new MalformedDataException(e);
-		} catch (IOException e) {
-			throw new AssertionError();
-		}
+		byte last = reader.last();
 
-		switch (jsonToken) {
-			case NULL:
+		switch (last) {
+			case 'n':
 				return EnumSet.of(NULL);
-			case BOOLEAN:
+			case 't':
+			case 'f':
 				return EnumSet.of(BOOLEAN);
-			case NUMBER:
-				return EnumSet.of(BYTE, INT, LONG, FLOAT, DOUBLE);
-			case STRING:
+			case '"':
 				return EnumSet.of(STRING, BYTES);
-			case BEGIN_ARRAY:
+			case '[':
 				return EnumSet.of(LIST, TUPLE);
-			case BEGIN_OBJECT:
+			case '{':
 				return EnumSet.of(MAP, OBJECT);
 			default:
-				throw new MalformedDataException("Invalid token: " + jsonToken);
+				return EnumSet.of(BYTE, INT, LONG, FLOAT, DOUBLE);
 		}
 	}
 
+	private void afterRead() throws MalformedDataException {
+		if (nested > 0) {
+			try {
+				byte last = reader.getNextToken();
+				if (last == ',') {
+					reader.getNextToken();
+				} else if (last == ']' || last == '}') {
+					nested--;
+				} else {
+					throw new MalformedDataException("Unexpected token: " + (char) last);
+				}
+			} catch (ParsingException e) {
+				throw new MalformedDataException(e);
+			} catch (IOException e) {
+				throw new AssertionError();
+			}
+		}
+	}
 }

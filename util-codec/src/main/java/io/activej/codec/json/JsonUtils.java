@@ -17,10 +17,9 @@
 package io.activej.codec.json;
 
 import com.dslplatform.json.DslJson;
+import com.dslplatform.json.JsonReader;
 import com.dslplatform.json.JsonWriter;
-import com.google.gson.stream.JsonReader;
-import com.google.gson.stream.JsonToken;
-import com.google.gson.stream.MalformedJsonException;
+import com.dslplatform.json.ParsingException;
 import io.activej.bytebuf.ByteBuf;
 import io.activej.codec.StructuredCodec;
 import io.activej.codec.StructuredDecoder;
@@ -28,30 +27,31 @@ import io.activej.codec.StructuredEncoder;
 import io.activej.common.exception.MalformedDataException;
 import io.activej.common.exception.UncheckedException;
 
-import java.io.EOFException;
 import java.io.IOException;
-import java.io.StringReader;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 public class JsonUtils {
 	private static final DslJson<?> DSL_JSON = new DslJson<>();
 
 	public static <T> T fromJson(StructuredDecoder<T> decoder, String string) throws MalformedDataException {
-		JsonReader reader = new JsonReader(new StringReader(string));
+		System.out.println(string);
+		byte[] bytes = string.getBytes(UTF_8);
+		JsonReader<?> reader = DSL_JSON.newReader(bytes);
 		T result;
 		try {
+			reader.getNextToken();
 			result = decoder.decode(new JsonStructuredInput(reader));
 		} catch (UncheckedException e) {
 			throw e.propagate(MalformedDataException.class);
-		}
-
-		try {
-			if (reader.peek() != JsonToken.END_DOCUMENT) {
-				throw new MalformedDataException("Json data was not fully consumed when decoding");
-			}
-		} catch (EOFException | MalformedJsonException e) {
+		} catch (ParsingException e) {
 			throw new MalformedDataException(e);
 		} catch (IOException e) {
 			throw new AssertionError();
+		}
+
+		if (reader.getCurrentIndex() != bytes.length) {
+			throw new MalformedDataException("Json data was not fully consumed when decoding");
 		}
 		return result;
 	}

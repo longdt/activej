@@ -29,10 +29,10 @@ public class StructuredCodecTest {
 				Tuple2::getValue1, STRING_CODEC.nullable(),
 				Tuple2::getValue2, INT_CODEC.nullable());
 
-		test(STRING_CODEC.ofList(), asList("abc"));
-
-		test(codec.ofList().nullable(), null);
-		test(codec.nullable().ofList(), asList((Tuple2<String, Integer>) null));
+//		test(STRING_CODEC.ofList(), asList("abc"));
+//
+//		test(codec.ofList().nullable(), null);
+//		test(codec.nullable().ofList(), asList((Tuple2<String, Integer>) null));
 		test(codec.ofList(), asList(new Tuple2<>("abc", 123)));
 		test(codec.nullable().ofList(), asList(null, new Tuple2<>("abc", 123)));
 
