@@ -36,7 +36,7 @@ import java.util.function.Supplier;
 import static io.activej.common.Checks.checkNotNull;
 import static java.util.Collections.*;
 
-public class Utils {
+public final class Utils {
 
 	public static <T> T of(Supplier<T> supplier) {
 		return supplier.get();
