@@ -1,5 +1,6 @@
 package io.activej.launchers.crdt.rpc;
 
+import io.activej.async.service.EventloopTaskScheduler;
 import io.activej.config.Config;
 import io.activej.crdt.hash.CrdtMap;
 import io.activej.crdt.wal.WriteAheadLog;
@@ -11,11 +12,14 @@ import io.activej.rpc.server.RpcRequestHandler;
 import io.activej.rpc.server.RpcServer;
 
 import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
+import static io.activej.async.service.EventloopTaskScheduler.Schedule.ofInterval;
 import static io.activej.config.Config.ofClassPathProperties;
 import static io.activej.config.Config.ofSystemProperties;
+import static io.activej.config.converter.ConfigConverters.ofEventloopTaskSchedule;
 import static io.activej.config.converter.ConfigConverters.ofInetSocketAddress;
 
 public abstract class CrdtRpcServerModule<K extends Comparable<K>, S> extends AbstractModule {
@@ -52,5 +56,12 @@ public abstract class CrdtRpcServerModule<K extends Comparable<K>, S> extends Ab
 			server.withHandler((Class<Object>) entry.getKey(), (RpcRequestHandler<Object, Object>) entry.getValue());
 		}
 		return server;
+	}
+
+	@Provides
+	@Eager
+	EventloopTaskScheduler walFlushScheduler(Eventloop eventloop, WriteAheadLog<K, S> wal, Config config) {
+		return EventloopTaskScheduler.create(eventloop, wal::flush)
+				.withSchedule(config.get(ofEventloopTaskSchedule(), "flush.schedule", ofInterval(Duration.ofMinutes(1))));
 	}
 }
