@@ -5,9 +5,9 @@ import org.junit.Test;
 
 import java.util.Map;
 
-import static io.activej.codec.json.JsonUtils.fromJson;
-import static io.activej.codec.json.JsonUtils.toJson;
 import static io.activej.common.collection.CollectionUtils.map;
+import static io.activej.json.JsonUtils.fromJson;
+import static io.activej.json.JsonUtils.toJson;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
@@ -39,15 +39,15 @@ public final class FsExceptionCodecTest {
 				"file1", new FsScalarException("Test"),
 				"file2", new FileNotFoundException("Test"),
 				"file3", new IsADirectoryException("Test")
-				)));
+		)));
 	}
 
 	private static void doTest(FsException exception) {
-		String json = toJson(FsExceptionCodec.CODEC, exception);
+		String json = toJson(FsException.class, exception);
 		FsException deserializedException = deserialize(json);
 
 		doAssert(exception, deserializedException);
-		if (exception instanceof FsBatchException){
+		if (exception instanceof FsBatchException) {
 			Map<String, FsScalarException> exceptions = ((FsBatchException) exception).getExceptions();
 			Map<String, FsScalarException> deserializedExceptions = ((FsBatchException) deserializedException).getExceptions();
 			for (Map.Entry<String, FsScalarException> entry : exceptions.entrySet()) {
@@ -66,10 +66,16 @@ public final class FsExceptionCodecTest {
 	private static FsException deserialize(String json) {
 		FsException deserializedException;
 		try {
-			deserializedException = fromJson(FsExceptionCodec.CODEC, json);
+			deserializedException = fromJson(FsException.class, json);
 		} catch (MalformedDataException e) {
-			throw new AssertionError();
+			throw new AssertionError(e);
 		}
 		return deserializedException;
+	}
+
+	public static void main(String[] args) {
+		System.out.println(toJson(FsException.class, new FsScalarException("blah", true)));
+		System.out.println(toJson(new FsScalarException("blah", true)));
+
 	}
 }

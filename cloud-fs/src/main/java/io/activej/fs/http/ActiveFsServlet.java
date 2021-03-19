@@ -16,26 +16,25 @@
 
 package io.activej.fs.http;
 
-
 import io.activej.bytebuf.ByteBuf;
 import io.activej.common.exception.UncheckedException;
 import io.activej.csp.ChannelConsumer;
 import io.activej.csp.ChannelSupplier;
 import io.activej.fs.ActiveFs;
 import io.activej.fs.exception.FileNotFoundException;
-import io.activej.fs.exception.FsExceptionCodec;
+import io.activej.fs.exception.FsException;
 import io.activej.http.*;
 import io.activej.http.MultipartDecoder.MultipartDataHandler;
+import io.activej.json.JsonUtils;
 import io.activej.promise.Promise;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
-import static io.activej.codec.json.JsonUtils.toJson;
-import static io.activej.codec.json.JsonUtils.toJsonBuf;
 import static io.activej.fs.http.FsCommand.*;
-import static io.activej.fs.util.Codecs.*;
+import static io.activej.fs.util.MessageTypes.STRING_SET_TYPE;
+import static io.activej.fs.util.MessageTypes.STRING_STRING_MAP_TYPE;
 import static io.activej.fs.util.RemoteFsUtils.castError;
 import static io.activej.fs.util.RemoteFsUtils.decodeBody;
 import static io.activej.http.ContentTypes.JSON_UTF_8;
@@ -44,6 +43,7 @@ import static io.activej.http.HttpHeaderValue.ofContentType;
 import static io.activej.http.HttpHeaders.*;
 import static io.activej.http.HttpMethod.GET;
 import static io.activej.http.HttpMethod.POST;
+import static io.activej.json.JsonUtils.toJsonBuf;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 /**
@@ -101,21 +101,21 @@ public final class ActiveFsServlet {
 					return (fs.list(glob))
 							.mapEx(errorHandler(list ->
 									HttpResponse.ok200()
-											.withBody(toJson(FILE_META_MAP_CODEC, list).getBytes(UTF_8))
+											.withBody(JsonUtils.toJson(list).getBytes(UTF_8))
 											.withHeader(CONTENT_TYPE, ofContentType(JSON_UTF_8))));
 				})
 				.map(GET, "/" + INFO + "/*", request ->
 						fs.info(decodePath(request))
 								.mapEx(errorHandler(meta ->
 										HttpResponse.ok200()
-												.withBody(toJson(FILE_META_CODEC_NULLABLE, meta).getBytes(UTF_8))
+												.withBody(JsonUtils.toJson(meta).getBytes(UTF_8))
 												.withHeader(CONTENT_TYPE, ofContentType(JSON_UTF_8)))))
 				.map(GET, "/" + INFO_ALL, request -> request.loadBody()
-						.then(decodeBody(STRINGS_SET_CODEC))
+						.then(decodeBody(STRING_SET_TYPE))
 						.then(fs::infoAll)
 						.mapEx(errorHandler(map ->
 								HttpResponse.ok200()
-										.withBody(toJson(FILE_META_MAP_CODEC, map).getBytes(UTF_8))
+										.withBody(JsonUtils.toJson(map).getBytes(UTF_8))
 										.withHeader(CONTENT_TYPE, ofContentType(JSON_UTF_8)))))
 				.map(GET, "/" + PING, request -> fs.ping()
 						.mapEx(errorHandler()))
@@ -126,7 +126,7 @@ public final class ActiveFsServlet {
 							.mapEx(errorHandler());
 				})
 				.map(POST, "/" + MOVE_ALL, request -> request.loadBody()
-						.then(decodeBody(SOURCE_TO_TARGET_CODEC))
+						.then(decodeBody(STRING_STRING_MAP_TYPE))
 						.then(fs::moveAll)
 						.mapEx(errorHandler()))
 				.map(POST, "/" + COPY, request -> {
@@ -136,14 +136,14 @@ public final class ActiveFsServlet {
 							.mapEx(errorHandler());
 				})
 				.map(POST, "/" + COPY_ALL, request -> request.loadBody()
-						.then(decodeBody(SOURCE_TO_TARGET_CODEC))
+						.then(decodeBody(STRING_STRING_MAP_TYPE))
 						.then(fs::copyAll)
 						.mapEx(errorHandler()))
 				.map(HttpMethod.DELETE, "/" + DELETE + "/*", request ->
 						fs.delete(decodePath(request))
 								.mapEx(errorHandler()))
 				.map(POST, "/" + DELETE_ALL, request -> request.loadBody()
-						.then(decodeBody(STRINGS_SET_CODEC))
+						.then(decodeBody(STRING_SET_TYPE))
 						.then(fs::deleteAll)
 						.mapEx(errorHandler()));
 	}
@@ -200,7 +200,7 @@ public final class ActiveFsServlet {
 	private static HttpResponse getErrorResponse(Throwable e) {
 		return HttpResponse.ofCode(500)
 				.withHeader(CONTENT_TYPE, ofContentType(JSON_UTF_8))
-				.withBody(toJsonBuf(FsExceptionCodec.CODEC, castError(e)));
+				.withBody(toJsonBuf(FsException.class, castError(e)));
 	}
 
 	private static <T> BiFunction<T, Throwable, HttpResponse> errorHandler() {
@@ -219,7 +219,7 @@ public final class ActiveFsServlet {
 						.mapEx(($, e) -> e == null ?
 								UploadAcknowledgement.ok() :
 								UploadAcknowledgement.ofError(castError(e)))
-						.map(ack -> ChannelSupplier.of(toJsonBuf(UploadAcknowledgement.CODEC, ack))))));
+						.map(ack -> ChannelSupplier.of(toJsonBuf(UploadAcknowledgement.class, ack))))));
 	}
 
 }

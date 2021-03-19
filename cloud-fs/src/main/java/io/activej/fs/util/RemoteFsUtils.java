@@ -17,18 +17,13 @@
 package io.activej.fs.util;
 
 import io.activej.bytebuf.ByteBuf;
-import io.activej.bytebuf.ByteBufPool;
-import io.activej.codec.StructuredCodec;
-import io.activej.codec.StructuredDecoder;
-import io.activej.codec.json.JsonUtils;
 import io.activej.common.collection.Try;
 import io.activej.common.exception.MalformedDataException;
 import io.activej.common.exception.TruncatedDataException;
 import io.activej.common.exception.UnexpectedDataException;
 import io.activej.common.ref.RefLong;
+import io.activej.common.reflection.TypeT;
 import io.activej.csp.ChannelConsumer;
-import io.activej.csp.binary.ByteBufsCodec;
-import io.activej.csp.binary.ByteBufsDecoder;
 import io.activej.csp.dsl.ChannelConsumerTransformer;
 import io.activej.fs.exception.FsBatchException;
 import io.activej.fs.exception.FsException;
@@ -47,8 +42,8 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
-import static io.activej.codec.json.JsonUtils.fromJson;
 import static io.activej.common.collection.CollectionUtils.map;
+import static io.activej.json.JsonUtils.fromJson;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 public final class RemoteFsUtils {
@@ -96,24 +91,20 @@ public final class RemoteFsUtils {
 		return str -> matcher.matches(Paths.get(str));
 	}
 
-	public static <I, O> ByteBufsCodec<I, O> nullTerminatedJson(StructuredCodec<I> in, StructuredCodec<O> out) {
-		return ByteBufsCodec
-				.ofDelimiter(
-						ByteBufsDecoder.ofNullTerminatedBytes(),
-						buf -> {
-							ByteBuf buf1 = ByteBufPool.ensureWriteRemaining(buf, 1);
-							buf1.put((byte) 0);
-							return buf1;
-						})
-				.andThen(
-						buf -> JsonUtils.fromJson(in, buf.asString(UTF_8)),
-						item -> JsonUtils.toJsonBuf(out, item));
-	}
-
-	public static <T> Function<ByteBuf, Promise<T>> decodeBody(StructuredDecoder<T> decoder) {
+	public static <T> Function<ByteBuf, Promise<T>> decodeBody(Class<T> cls) {
 		return body -> {
 			try {
-				return Promise.of(fromJson(decoder, body.getString(UTF_8)));
+				return Promise.of(fromJson(cls, body.getString(UTF_8)));
+			} catch (MalformedDataException e) {
+				return Promise.ofException(e);
+			}
+		};
+	}
+
+	public static <T> Function<ByteBuf, Promise<T>> decodeBody(TypeT<? extends T> type) {
+		return body -> {
+			try {
+				return Promise.of(fromJson(type, body.getString(UTF_8)));
 			} catch (MalformedDataException e) {
 				return Promise.ofException(e);
 			}

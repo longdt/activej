@@ -19,43 +19,45 @@ package io.activej.json;
 import com.dslplatform.json.DslJson;
 import com.dslplatform.json.JsonWriter;
 import com.dslplatform.json.Nullable;
+import com.dslplatform.json.ParsingException;
 import com.dslplatform.json.runtime.Settings;
 import io.activej.bytebuf.ByteBuf;
 import io.activej.common.exception.MalformedDataException;
 import io.activej.common.reflection.TypeT;
 import org.jetbrains.annotations.NotNull;
 
+import java.io.IOException;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 
 public final class JsonUtils {
 	private static final DslJson<?> DSL_JSON = new DslJson<>(Settings.withRuntime().includeServiceLoader());
 	private static final ThreadLocal<JsonWriter> WRITERS = ThreadLocal.withInitial(DSL_JSON::newWriter);
-	public static final byte[] NULL_BYTES = {'n', 'u', 'l', 'l'};
 
 	public static <T> String toJson(@Nullable T object) {
 		if (object == null) return "null";
-		return toJson(object.getClass(), object);
+		//noinspection unchecked
+		return toJson((Class<? super T>) object.getClass(), object);
 	}
 
 	public static <T> ByteBuf toJsonBuf(@Nullable T object) {
-		if (object == null) return ByteBuf.wrap(NULL_BYTES, 0, 4);
+		if (object == null) return ByteBuf.wrap(new byte[]{'n', 'u', 'l', 'l'}, 0, 4);
 		return toJsonBuf(object.getClass(), object);
 	}
 
-	public static <T> String toJson(@NotNull TypeT<? extends T> manifest, @Nullable T object) {
+	public static <T> String toJson(@NotNull TypeT<? super T> manifest, @Nullable T object) {
 		return toJson(manifest.getType(), object).toString();
 	}
 
-	public static <T> ByteBuf toJsonBuf(@NotNull TypeT<? extends T> manifest, @Nullable T object) {
+	public static <T> ByteBuf toJsonBuf(@NotNull TypeT<? super T> manifest, @Nullable T object) {
 		return toJsonBuf(manifest.getType(), object);
 	}
 
-	public static <T> String toJson(@NotNull Class<? extends T> manifest, @Nullable T object) {
+	public static <T> String toJson(@NotNull Class<? super T> manifest, @Nullable T object) {
 		return toJson((Type) manifest, object).toString();
 	}
 
-	public static <T> ByteBuf toJsonBuf(@NotNull Class<? extends T> manifest, @Nullable T object) {
+	public static <T> ByteBuf toJsonBuf(@NotNull Class<? super T> manifest, @Nullable T object) {
 		return toJsonBuf((Type) manifest, object);
 	}
 
@@ -87,8 +89,10 @@ public final class JsonUtils {
 		try {
 			Object deserialized = DSL_JSON.deserialize(manifest, bytes, bytes.length);
 			return (T) deserialized;
-		} catch (Exception e) {
+		} catch (ParsingException e) {
 			throw new MalformedDataException(e);
+		} catch (IOException e){
+			throw new AssertionError(e);
 		}
 	}
 }

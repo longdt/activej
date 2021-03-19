@@ -39,7 +39,9 @@ import java.util.function.Function;
 import static io.activej.async.util.LogUtils.Level.TRACE;
 import static io.activej.async.util.LogUtils.toLogger;
 import static io.activej.common.Checks.checkNotNull;
-import static io.activej.fs.util.RemoteFsUtils.*;
+import static io.activej.fs.util.RemoteFsUtils.castError;
+import static io.activej.fs.util.RemoteFsUtils.ofFixedSize;
+import static io.activej.json.CspJsonUtils.nullTerminatedJson;
 
 /**
  * An implementation of {@link AbstractServer} that works with {@link RemoteActiveFs} client.
@@ -49,7 +51,7 @@ import static io.activej.fs.util.RemoteFsUtils.*;
  */
 public final class ActiveFsServer extends AbstractServer<ActiveFsServer> {
 	private static final ByteBufsCodec<FsCommand, FsResponse> SERIALIZER =
-			nullTerminatedJson(RemoteFsCommands.CODEC, RemoteFsResponses.CODEC);
+			nullTerminatedJson(FsCommand.class, FsResponse.class);
 
 	private final Map<Class<?>, MessagingHandler<FsCommand>> handlers = new HashMap<>();
 	private final ActiveFs fs;
