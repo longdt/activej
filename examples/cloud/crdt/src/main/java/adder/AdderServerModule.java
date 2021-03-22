@@ -1,7 +1,5 @@
 package adder;
 
-import io.activej.async.process.AsyncExecutor;
-import io.activej.async.process.AsyncExecutors;
 import io.activej.common.api.Initializer;
 import io.activej.common.collection.CollectionUtils;
 import io.activej.config.Config;
@@ -32,17 +30,22 @@ public class AdderServerModule extends AbstractModule {
 	}
 
 	@Provides
+	IdSequentialExecutor<Long> sequentialExecutor() {
+		return new IdSequentialExecutor<>();
+	}
+
+	@Provides
 	@SuppressWarnings("ConstantConditions")
 	Map<Class<?>, RpcRequestHandler<?, ?>> handlers(
 			@ServerId String serverId,
 			CrdtMap<Long, SimpleSumsCrdtState> map,
-			WriteAheadLog<Long, DetailedSumsCrdtState> writeAheadLog
+			WriteAheadLog<Long, DetailedSumsCrdtState> writeAheadLog,
+			IdSequentialExecutor<Long> seqExecutor
 	) {
-		AsyncExecutor sequentialExecutor = AsyncExecutors.sequential();
 		return CollectionUtils.map(
 				PutRequest.class, (RpcRequestHandler<PutRequest, PutResponse>) request -> {
 					long userId = request.getUserId();
-					return sequentialExecutor.execute(() -> map.get(userId)
+					return seqExecutor.execute(userId, () -> map.get(userId)
 							.then(state -> {
 								float newSum = request.getDelta() +
 										(state == null ?
