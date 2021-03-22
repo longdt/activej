@@ -2,7 +2,6 @@ package io.activej.launchers.crdt.rpc;
 
 import io.activej.async.service.EventloopTaskScheduler;
 import io.activej.config.Config;
-import io.activej.crdt.hash.CrdtMap;
 import io.activej.crdt.wal.WriteAheadLog;
 import io.activej.eventloop.Eventloop;
 import io.activej.inject.annotation.Eager;
@@ -44,11 +43,7 @@ public abstract class CrdtRpcServerModule<K extends Comparable<K>, S> extends Ab
 	@Provides
 	@Eager
 	@SuppressWarnings("unchecked")
-	RpcServer server(Eventloop eventloop,
-					 CrdtMap<K, S> map,
-					 WriteAheadLog<K, S> writeAheadLog,
-					 Map<Class<?>, RpcRequestHandler<?, ?>> handlers,
-					 Config config) {
+	RpcServer server(Eventloop eventloop, Map<Class<?>, RpcRequestHandler<?, ?>> handlers, Config config) {
 		RpcServer server = RpcServer.create(eventloop)
 				.withListenAddress(config.get(ofInetSocketAddress(), "listenAddresses"))
 				.withMessageTypes(getMessageTypes());

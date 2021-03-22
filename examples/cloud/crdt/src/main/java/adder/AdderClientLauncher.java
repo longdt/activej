@@ -11,7 +11,10 @@ import io.activej.rpc.client.RpcClient;
 import io.activej.rpc.hash.ShardingFunction;
 
 import java.net.InetSocketAddress;
-import java.util.*;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Stream;
 
@@ -80,9 +83,8 @@ public final class AdderClientLauncher extends CrdtRpcClientLauncher {
 		eventloop.submit(() ->
 				Promises.until(0, i -> Promises.all(USER_IDS.stream()
 								.map(userId -> {
-									float delta = RANDOM.nextFloat() * MAX_DELTA;
-									String eventId = UUID.randomUUID().toString();
-									return client.sendRequest(new PutRequest(userId, eventId, delta))
+									float delta = RANDOM.nextFloat() * MAX_DELTA + 1;
+									return client.sendRequest(new PutRequest(userId, delta))
 											.whenResult(() -> controlMap.merge(userId, delta, Float::sum));
 								}))
 								.map($ -> i + 1),

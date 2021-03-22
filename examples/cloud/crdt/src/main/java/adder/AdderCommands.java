@@ -1,20 +1,24 @@
 package adder;
 
+import io.activej.common.Checks;
 import io.activej.serializer.annotations.Deserialize;
 import io.activej.serializer.annotations.Serialize;
 
+import static io.activej.common.Checks.checkArgument;
+
 public class AdderCommands {
+	public static final boolean CHECK = Checks.isEnabled(AdderCommands.class);
+
 	public static final class PutRequest {
 		private final long userId;
-		private final String eventId;
 		private final float delta;
 
 		public PutRequest(
 				@Deserialize("userId") long userId,
-				@Deserialize("eventId") String eventId,
 				@Deserialize("delta") float delta) {
+			if (CHECK) checkArgument(delta > 0);
+
 			this.userId = userId;
-			this.eventId = eventId;
 			this.delta = delta;
 		}
 
@@ -24,11 +28,6 @@ public class AdderCommands {
 		}
 
 		@Serialize(order = 2)
-		public String getEventId() {
-			return eventId;
-		}
-
-		@Serialize(order = 3)
 		public float getDelta() {
 			return delta;
 		}
