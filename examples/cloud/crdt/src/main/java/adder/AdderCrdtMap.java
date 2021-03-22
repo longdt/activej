@@ -1,5 +1,7 @@
 package adder;
 
+import io.activej.async.function.AsyncSupplier;
+import io.activej.async.function.AsyncSuppliers;
 import io.activej.async.service.EventloopService;
 import io.activej.crdt.hash.CrdtMap;
 import io.activej.crdt.storage.CrdtStorage;
@@ -17,17 +19,22 @@ public class AdderCrdtMap implements CrdtMap<Long, SimpleSumsCrdtState>, Eventlo
 
 	private final Eventloop eventloop;
 	private final String localServerId;
-	private final CrdtStorage<Long, DetailedSumsCrdtState> storage;
+	private final AsyncSupplier<Void> refresh;
 
 	public AdderCrdtMap(Eventloop eventloop, String localServerId, @NotNull CrdtStorage<Long, DetailedSumsCrdtState> storage) {
 		this.eventloop = eventloop;
 		this.localServerId = localServerId;
-		this.storage = storage;
+		this.refresh = AsyncSuppliers.reuse(() -> doRefresh(storage));
 	}
 
 	@Override
 	public Promise<@Nullable SimpleSumsCrdtState> get(Long key) {
 		return Promise.of(map.get(key));
+	}
+
+	@Override
+	public Promise<Void> refresh() {
+		return refresh.get();
 	}
 
 	@Override
@@ -42,6 +49,15 @@ public class AdderCrdtMap implements CrdtMap<Long, SimpleSumsCrdtState>, Eventlo
 
 	@Override
 	public @NotNull Promise<?> start() {
+		return refresh();
+	}
+
+	@Override
+	public @NotNull Promise<?> stop() {
+		return Promise.complete();
+	}
+
+	private Promise<Void> doRefresh(CrdtStorage<Long, DetailedSumsCrdtState> storage) {
 		return storage.download()
 				.then(supplier -> supplier.streamTo(
 						StreamConsumer.of(crdtData -> {
@@ -52,10 +68,5 @@ public class AdderCrdtMap implements CrdtMap<Long, SimpleSumsCrdtState>, Eventlo
 
 							map.put(crdtData.getKey(), SimpleSumsCrdtState.of(localSum, otherSum));
 						})));
-	}
-
-	@Override
-	public @NotNull Promise<?> stop() {
-		return Promise.complete();
 	}
 }

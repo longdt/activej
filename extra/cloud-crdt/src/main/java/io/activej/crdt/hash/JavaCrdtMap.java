@@ -1,5 +1,7 @@
 package io.activej.crdt.hash;
 
+import io.activej.async.function.AsyncSupplier;
+import io.activej.async.function.AsyncSuppliers;
 import io.activej.async.service.EventloopService;
 import io.activej.crdt.function.CrdtFunction;
 import io.activej.crdt.storage.CrdtStorage;
@@ -18,24 +20,28 @@ public class JavaCrdtMap<K extends Comparable<K>, S> implements CrdtMap<K, S>, E
 	private final Eventloop eventloop;
 	private final CrdtFunction<S> crdtFunction;
 
-	@Nullable
-	private final CrdtStorage<K, S> storage;
+	private final AsyncSupplier<Void> refresh;
 
 	public JavaCrdtMap(Eventloop eventloop, CrdtFunction<S> crdtFunction) {
 		this.eventloop = eventloop;
 		this.crdtFunction = crdtFunction;
-		this.storage = null;
+		this.refresh = Promise::complete;
 	}
 
 	public JavaCrdtMap(Eventloop eventloop, CrdtFunction<S> crdtFunction, @NotNull CrdtStorage<K, S> storage) {
 		this.eventloop = eventloop;
 		this.crdtFunction = crdtFunction;
-		this.storage = storage;
+		this.refresh = AsyncSuppliers.reuse(() -> doRefresh(storage));
 	}
 
 	@Override
 	public Promise<@Nullable S> get(K key) {
 		return Promise.of(map.get(key));
+	}
+
+	@Override
+	public Promise<Void> refresh() {
+		return refresh.get();
 	}
 
 	@Override
@@ -50,14 +56,17 @@ public class JavaCrdtMap<K extends Comparable<K>, S> implements CrdtMap<K, S>, E
 
 	@Override
 	public @NotNull Promise<?> start() {
-		return storage == null ?
-				Promise.complete() :
-				storage.download()
-						.then(supplier -> supplier.streamTo(StreamConsumer.of(crdtData -> map.put(crdtData.getKey(), crdtData.getState()))));
+		return refresh();
 	}
 
 	@Override
 	public @NotNull Promise<?> stop() {
 		return Promise.complete();
+	}
+
+	private Promise<Void> doRefresh(CrdtStorage<K, S> storage) {
+		assert storage != null;
+		return storage.download()
+						.then(supplier -> supplier.streamTo(StreamConsumer.of(crdtData -> map.put(crdtData.getKey(), crdtData.getState()))));
 	}
 }

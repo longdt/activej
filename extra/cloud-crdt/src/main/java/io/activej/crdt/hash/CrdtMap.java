@@ -7,4 +7,6 @@ public interface CrdtMap<K extends Comparable<K>, S> {
 	Promise<@Nullable S> put(K key, S value);
 
 	Promise<@Nullable S> get(K key);
+
+	Promise<Void> refresh();
 }
