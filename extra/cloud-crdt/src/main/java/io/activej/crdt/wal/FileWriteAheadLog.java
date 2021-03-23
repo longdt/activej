@@ -48,6 +48,7 @@ import java.util.UUID;
 import java.util.concurrent.Executor;
 import java.util.function.Function;
 
+import static io.activej.async.util.LogUtils.Level.TRACE;
 import static io.activej.async.util.LogUtils.toLogger;
 import static io.activej.common.Utils.nullify;
 import static java.util.Comparator.naturalOrder;
@@ -78,6 +79,7 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 
 	private WalConsumer consumer;
 	private boolean stopping;
+	private boolean flushRequired;
 
 	private FileWriteAheadLog(
 			Eventloop eventloop,
@@ -119,6 +121,7 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 	@Override
 	public Promise<Void> put(K key, S value) {
 		logger.trace("Putting value {} at key {}", value, key);
+		flushRequired = true;
 		return consumer.accept(new CrdtData<>(key, value));
 	}
 
@@ -143,6 +146,7 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 	@Override
 	public @NotNull Promise<?> stop() {
 		stopping = true;
+		flushRequired = true;
 		return flush();
 	}
 
@@ -151,22 +155,25 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 	}
 
 	private Promise<Void> doFlush() {
-		assert this.consumer != null;
+		assert consumer != null;
 
-		WalConsumer finishedConsumer = this.consumer;
-		this.consumer = stopping ? null : createConsumer();
+		if (!flushRequired) {
+			logger.trace("Nothing to flush");
+			return Promise.complete();
+		}
+
+		flushRequired = false;
+
+		WalConsumer finishedConsumer = consumer;
+		consumer = stopping ? null : createConsumer();
 
 		logger.trace("Begin flushing write ahead log");
 
 		return finishedConsumer.finish()
 				.then(this::getWalFiles)
-				.whenResult(walFiles -> {
-					if (consumer != null) {
-						walFiles.remove(consumer.getWalFile());
-					}
-				})
 				.then(this::flushWaLFiles)
-				.whenComplete(toLogger(logger, "doFlush", this));
+				.whenException(e -> flushRequired = true)
+				.whenComplete(toLogger(logger, TRACE, TRACE, "doFlush", this));
 	}
 
 	private Promise<Void> flushWaLFiles(Set<Path> walFiles) {
@@ -230,8 +237,13 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 
 	private Promise<Set<Path>> getWalFiles() {
 		return Promise.ofBlockingCallable(executor, () -> Files.list(path)
-				.filter(file -> Files.isRegularFile(file) &&
-						file.toString().endsWith(EXT))
+				.filter(file -> {
+					if (consumer != null && file.equals(consumer.getWalFile())) {
+						return false;
+					}
+					return Files.isRegularFile(file) &&
+							file.toString().endsWith(EXT);
+				})
 				.collect(toSet()))
 				.whenResult(walFiles -> logger.trace("Found {} write ahead logs {}", walFiles.size(), walFiles));
 	}
