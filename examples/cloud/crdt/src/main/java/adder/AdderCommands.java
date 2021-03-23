@@ -3,6 +3,8 @@ package adder;
 import io.activej.common.Checks;
 import io.activej.serializer.annotations.Deserialize;
 import io.activej.serializer.annotations.Serialize;
+import io.activej.serializer.annotations.SerializeNullable;
+import org.jetbrains.annotations.Nullable;
 
 import static io.activej.common.Checks.checkArgument;
 
@@ -51,14 +53,16 @@ public class AdderCommands {
 	}
 
 	public static final class GetResponse {
-		private final float sum;
+		private final Float sum;
 
-		public GetResponse(@Deserialize("sum") float sum) {
+		public GetResponse(@Nullable @Deserialize("sum") Float sum) {
 			this.sum = sum;
 		}
 
 		@Serialize(order = 1)
-		public float getSum() {
+		@SerializeNullable
+		@Nullable
+		public Float getSum() {
 			return sum;
 		}
 	}

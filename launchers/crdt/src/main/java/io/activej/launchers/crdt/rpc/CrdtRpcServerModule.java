@@ -57,6 +57,7 @@ public abstract class CrdtRpcServerModule<K extends Comparable<K>, S> extends Ab
 	@Eager
 	EventloopTaskScheduler walFlushScheduler(Eventloop eventloop, WriteAheadLog<K, S> wal, Config config) {
 		return EventloopTaskScheduler.create(eventloop, wal::flush)
-				.withSchedule(config.get(ofEventloopTaskSchedule(), "flush.schedule", ofInterval(Duration.ofMinutes(1))));
+				.withSchedule(config.get(ofEventloopTaskSchedule(), "flush.schedule", ofInterval(Duration.ofMinutes(1))))
+				.withInitialDelay(Duration.ofMinutes(1));
 	}
 }

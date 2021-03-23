@@ -6,8 +6,6 @@ import io.activej.config.Config;
 import io.activej.crdt.function.CrdtFunction;
 import io.activej.crdt.hash.CrdtMap;
 import io.activej.crdt.storage.CrdtStorage;
-import io.activej.crdt.storage.local.CrdtStorageMap;
-import io.activej.crdt.wal.InMemoryWriteAheadLog;
 import io.activej.crdt.wal.WriteAheadLog;
 import io.activej.eventloop.Eventloop;
 import io.activej.inject.Key;
@@ -23,6 +21,12 @@ import static adder.AdderCommands.*;
 
 public class AdderServerModule extends AbstractModule {
 
+	@Override
+	protected void configure() {
+//		install(new InMemoryStorageModule());
+		install(new PersistentStorageModule());
+	}
+
 	@Provides
 	@ServerId
 	String serverId(Config config) {
@@ -35,7 +39,6 @@ public class AdderServerModule extends AbstractModule {
 	}
 
 	@Provides
-	@SuppressWarnings("ConstantConditions")
 	Map<Class<?>, RpcRequestHandler<?, ?>> handlers(
 			@ServerId String serverId,
 			CrdtMap<Long, SimpleSumsCrdtState> map,
@@ -59,7 +62,7 @@ public class AdderServerModule extends AbstractModule {
 				},
 				GetRequest.class, (RpcRequestHandler<GetRequest, GetResponse>) request ->
 						map.get(request.getUserId())
-								.map(SimpleSumsCrdtState::value)
+								.map(state -> state == null ? null : state.value())
 								.map(GetResponse::new)
 		);
 	}
@@ -82,20 +85,6 @@ public class AdderServerModule extends AbstractModule {
 				return state;
 			}
 		};
-	}
-
-	@Provides
-	WriteAheadLog<Long, DetailedSumsCrdtState> writeAheadLog(
-			Eventloop eventloop,
-			CrdtFunction<DetailedSumsCrdtState> function,
-			CrdtStorage<Long, DetailedSumsCrdtState> storage
-	) {
-		return new InMemoryWriteAheadLog<>(eventloop, function, storage);
-	}
-
-	@Provides
-	CrdtStorage<Long, DetailedSumsCrdtState> storage(Eventloop eventloop, CrdtFunction<DetailedSumsCrdtState> function) {
-		return CrdtStorageMap.create(eventloop, function);
 	}
 
 	@ProvidesIntoSet
