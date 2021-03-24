@@ -10,7 +10,6 @@ import io.activej.crdt.CrdtData;
 import io.activej.crdt.function.CrdtFunction;
 import io.activej.crdt.storage.CrdtStorage;
 import io.activej.crdt.util.CrdtDataSerializer;
-import io.activej.csp.AbstractChannelConsumer;
 import io.activej.csp.ChannelConsumer;
 import io.activej.csp.ChannelSupplier;
 import io.activej.csp.file.ChannelFileReader;
@@ -30,7 +29,6 @@ import io.activej.datastream.processor.StreamSorter;
 import io.activej.datastream.processor.StreamSorterStorageImpl;
 import io.activej.eventloop.Eventloop;
 import io.activej.promise.Promise;
-import io.activej.promise.Promises;
 import io.activej.promise.SettablePromise;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -41,18 +39,18 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executor;
 import java.util.function.Function;
+import java.util.stream.Stream;
 
 import static io.activej.async.util.LogUtils.Level.TRACE;
 import static io.activej.async.util.LogUtils.toLogger;
-import static io.activej.common.Utils.nullify;
+import static java.util.Collections.singleton;
 import static java.util.Comparator.naturalOrder;
-import static java.util.stream.Collectors.toSet;
+import static java.util.stream.Collectors.toList;
 
 public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAheadLog<K, S>, EventloopService {
 	private static final Logger logger = LoggerFactory.getLogger(FileWriteAheadLog.class);
@@ -146,28 +144,27 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 	@Override
 	public @NotNull Promise<?> stop() {
 		stopping = true;
-		flushRequired = true;
-		return flush();
+		if (flushRequired) return flush();
+
+		return deleteWalFiles(singleton(consumer.walFile));
 	}
 
+	@Nullable
 	private WalConsumer createConsumer() {
-		return new WalConsumer(path.resolve(UUID.randomUUID() + EXT));
+		return stopping ? null : new WalConsumer(path.resolve(UUID.randomUUID() + EXT));
 	}
 
 	private Promise<Void> doFlush() {
-		assert consumer != null;
-
 		if (!flushRequired) {
 			logger.trace("Nothing to flush");
 			return Promise.complete();
 		}
-
 		flushRequired = false;
 
-		WalConsumer finishedConsumer = consumer;
-		consumer = stopping ? null : createConsumer();
-
 		logger.trace("Begin flushing write ahead log");
+
+		WalConsumer finishedConsumer = consumer;
+		consumer = createConsumer();
 
 		return finishedConsumer.finish()
 				.then(this::getWalFiles)
@@ -176,85 +173,92 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 				.whenComplete(toLogger(logger, TRACE, TRACE, "doFlush", this));
 	}
 
-	private Promise<Void> flushWaLFiles(Set<Path> walFiles) {
+	private Promise<Void> flushWaLFiles(List<Path> walFiles) {
 		if (walFiles.isEmpty()) return Promise.complete();
 
 		logger.info("Flushing write ahead logs {}", walFiles);
 
-		StreamSorter<K, CrdtData<K, S>> sorter;
 		Path sortDir;
 		try {
-			if (this.sortDir != null) {
-				sortDir = this.sortDir;
-			} else {
-				sortDir = Files.createTempDirectory("crdt-wal-sort-dir");
-			}
-			StreamSorterStorageImpl<CrdtData<K, S>> sorterStorage = StreamSorterStorageImpl.create(executor, serializer, FRAME_FORMAT, sortDir);
-			sorter = StreamSorter.create(sorterStorage, keyFn, naturalOrder(), false, sortItemsInMemory);
+			sortDir = createSortDir();
 		} catch (IOException e) {
+			logger.warn("Failed to create temporary sort directory", e);
 			return Promise.ofException(e);
 		}
 
-		List<Path> walFilesOrdered = new ArrayList<>(walFiles);
-		return Promises.toList(walFilesOrdered.stream()
-				.map(walFile -> ChannelFileReader.open(executor, walFile)))
-				.then(suppliers -> {
-					StreamReducer<K, CrdtData<K, S>, CrdtData<K, S>> reducer = StreamReducer.create();
-
-					for (int i = 0, suppliersSize = suppliers.size(); i < suppliersSize; i++) {
-						ChannelSupplier<ByteBuf> supplier = suppliers.get(i);
-						int finalI = i;
-						supplier.transformWith(ChannelFrameDecoder.create(FRAME_FORMAT))
-								.withEndOfStream(eos -> eos
-										.thenEx(($, e) -> {
-											if (e == null) {
-												return Promise.complete();
-											}
-											if (e instanceof TruncatedDataException) {
-												logger.warn("Write ahead log {} was truncated", walFilesOrdered.get(finalI));
-												return Promise.complete();
-											}
-											return Promise.ofException(e);
-										}))
-								.transformWith(ChannelDeserializer.create(serializer))
-								.streamTo(reducer.newInput(CrdtData::getKey, new WalReducer()));
-					}
-
-					return reducer.getOutput()
-							.transformWith(sorter)
-							.streamTo(storage.upload())
-							.whenComplete(() -> {
-								if (this.sortDir == null) {
-									try {
-										Files.deleteIfExists(sortDir);
-									} catch (IOException ignored) {
-									}
-								}
-							});
-				})
+		return createReducer(walFiles)
+				.getOutput()
+				.transformWith(createSorter(sortDir))
+				.streamTo(storage.upload())
+				.whenComplete(() -> cleanup(sortDir))
 				.then(() -> deleteWalFiles(walFiles));
 	}
 
-	private Promise<Set<Path>> getWalFiles() {
-		return Promise.ofBlockingCallable(executor, () -> Files.list(path)
-				.filter(file -> {
-					if (consumer != null && file.equals(consumer.getWalFile())) {
-						return false;
+	private Promise<List<Path>> getWalFiles() {
+		return Promise.ofBlockingCallable(executor,
+				() -> {
+					try (Stream<Path> list = Files.list(path)) {
+						return list
+								.filter(file -> Files.isRegularFile(file) &&
+										file.toString().endsWith(EXT) &&
+										(consumer == null || !file.equals(consumer.getWalFile())))
+								.collect(toList());
 					}
-					return Files.isRegularFile(file) &&
-							file.toString().endsWith(EXT);
 				})
-				.collect(toSet()))
 				.whenResult(walFiles -> logger.trace("Found {} write ahead logs {}", walFiles.size(), walFiles));
 	}
 
-	private Promise<Void> deleteWalFiles(Set<Path> walFiles) {
+	private Promise<Void> deleteWalFiles(Collection<Path> walFiles) {
 		logger.trace("Deleting write ahead logs: {}", walFiles);
 		return Promise.ofBlockingRunnable(executor, () -> {
 			for (Path walFile : walFiles) {
 				Files.deleteIfExists(walFile);
 			}
 		});
+	}
+
+	private StreamReducer<K, CrdtData<K, S>, CrdtData<K, S>> createReducer(List<Path> files) {
+		StreamReducer<K, CrdtData<K, S>, CrdtData<K, S>> reducer = StreamReducer.create();
+
+		for (Path file : files) {
+			ChannelSupplier.ofPromise(ChannelFileReader.open(executor, file))
+					.transformWith(ChannelFrameDecoder.create(FRAME_FORMAT))
+					.withEndOfStream(eos -> eos
+							.thenEx(($, e) -> {
+								if (e == null) return Promise.complete();
+								if (e instanceof TruncatedDataException) {
+									logger.warn("Write ahead log {} was truncated", file);
+									return Promise.complete();
+								}
+								return Promise.ofException(e);
+							}))
+					.transformWith(ChannelDeserializer.create(serializer))
+					.streamTo(reducer.newInput(CrdtData::getKey, new WalReducer()));
+		}
+
+		return reducer;
+	}
+
+	private StreamSorter<K, CrdtData<K, S>> createSorter(Path sortDir) {
+		StreamSorterStorageImpl<CrdtData<K, S>> sorterStorage = StreamSorterStorageImpl.create(executor, serializer, FRAME_FORMAT, sortDir);
+		return StreamSorter.create(sorterStorage, keyFn, naturalOrder(), false, sortItemsInMemory);
+	}
+
+	private Path createSortDir() throws IOException {
+		if (this.sortDir != null) {
+			return this.sortDir;
+		} else {
+			return Files.createTempDirectory("crdt-wal-sort-dir");
+		}
+	}
+
+	private void cleanup(Path sortDir) {
+		if (this.sortDir == null) {
+			try {
+				Files.deleteIfExists(sortDir);
+			} catch (IOException ignored) {
+			}
+		}
 	}
 
 	private final class WalReducer implements StreamReducers.Reducer<K, CrdtData<K, S>, CrdtData<K, S>, CrdtData<K, S>> {
@@ -293,13 +297,14 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 					.transformWith(ChannelSerializer.create(serializer)
 							.withAutoFlushInterval(Duration.ZERO))
 					.transformWith(ChannelFrameEncoder.create(FRAME_FORMAT))
-					.streamTo(new AbstractChannelConsumer<ByteBuf>(writer) {
-						@Override
-						protected Promise<Void> doAccept(@Nullable ByteBuf value) {
-							return writer.accept(value)
-									.whenComplete((result, e) -> writeCallback = nullify(writeCallback, cb -> cb.accept(result, e)));
-						}
-					})));
+					.streamTo(ChannelConsumer.of(value -> {
+						if (this.writeCallback == null) return writer.accept(value);
+
+						SettablePromise<Void> writeCallback = this.writeCallback;
+						this.writeCallback = null;
+						return writer.accept(value)
+								.whenComplete(writeCallback);
+					}))));
 		}
 
 		public Path getWalFile() {
