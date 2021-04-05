@@ -81,7 +81,8 @@ public class FileWriteAheadLogTest {
 		LocalActiveFs storageFs = LocalActiveFs.create(eventloop, executor, temporaryFolder.newFolder().toPath());
 		await(storageFs.start());
 		storage = CrdtStorageFs.create(eventloop, storageFs, serializer, function);
-		wal = FileWriteAheadLog.create(eventloop, executor, path, function, serializer, storage);
+		WalUploader<Long, GSet<Integer>> uploader = WalUploader.create(executor, path, function, serializer, storage);
+		wal = FileWriteAheadLog.create(eventloop, executor, path, serializer, uploader);
 	}
 
 	@Test

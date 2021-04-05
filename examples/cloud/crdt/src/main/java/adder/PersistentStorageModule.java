@@ -7,6 +7,7 @@ import io.activej.crdt.storage.CrdtStorage;
 import io.activej.crdt.storage.local.CrdtStorageFs;
 import io.activej.crdt.util.CrdtDataSerializer;
 import io.activej.crdt.wal.FileWriteAheadLog;
+import io.activej.crdt.wal.WalUploader;
 import io.activej.crdt.wal.WriteAheadLog;
 import io.activej.eventloop.Eventloop;
 import io.activej.fs.ActiveFs;
@@ -39,13 +40,24 @@ public final class PersistentStorageModule extends AbstractModule {
 	WriteAheadLog<Long, DetailedSumsCrdtState> writeAheadLog(
 			Eventloop eventloop,
 			Executor executor,
+			CrdtDataSerializer<Long, DetailedSumsCrdtState> serializer,
+			WalUploader<Long, DetailedSumsCrdtState> uploader,
+			Config config
+	) {
+		Path walPath = config.get(ofPath(), "wal-storage");
+		return FileWriteAheadLog.create(eventloop, executor, walPath, serializer, uploader);
+	}
+
+	@Provides
+	WalUploader<Long, DetailedSumsCrdtState> uploader(
+			Executor executor,
 			CrdtFunction<DetailedSumsCrdtState> function,
 			CrdtDataSerializer<Long, DetailedSumsCrdtState> serializer,
 			CrdtStorage<Long, DetailedSumsCrdtState> storage,
 			Config config
 	) {
 		Path walPath = config.get(ofPath(), "wal-storage");
-		return FileWriteAheadLog.create(eventloop, executor, walPath, function, serializer, storage);
+		return WalUploader.create(executor, walPath, function, serializer, storage);
 	}
 
 	@Provides
@@ -69,14 +81,14 @@ public final class PersistentStorageModule extends AbstractModule {
 	}
 
 	@Provides
-	CrdtDataSerializer<Long, DetailedSumsCrdtState> serializer(){
+	CrdtDataSerializer<Long, DetailedSumsCrdtState> serializer() {
 		return new CrdtDataSerializer<>(LONG_SERIALIZER, DetailedSumsCrdtState.SERIALIZER);
 	}
 
 	@Provides
 	@Named("consolidate")
 	@Eager
-	EventloopTaskScheduler consolidateScheduler(Eventloop eventloop, CrdtStorageFs<Long, DetailedSumsCrdtState> storageFs, Config config){
+	EventloopTaskScheduler consolidateScheduler(Eventloop eventloop, CrdtStorageFs<Long, DetailedSumsCrdtState> storageFs, Config config) {
 		return EventloopTaskScheduler.create(eventloop, storageFs::consolidate)
 				.withSchedule(config.get(ofEventloopTaskSchedule(), "consolidate.schedule", ofInterval(Duration.ofMinutes(3))))
 				.withInitialDelay(Duration.ofMinutes(3));
