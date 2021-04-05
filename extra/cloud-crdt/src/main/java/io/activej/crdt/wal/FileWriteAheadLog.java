@@ -29,6 +29,7 @@ import io.activej.datastream.processor.StreamSorter;
 import io.activej.datastream.processor.StreamSorterStorageImpl;
 import io.activej.eventloop.Eventloop;
 import io.activej.promise.Promise;
+import io.activej.promise.Promises;
 import io.activej.promise.SettablePromise;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -36,6 +37,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -48,6 +50,8 @@ import java.util.stream.Stream;
 
 import static io.activej.async.util.LogUtils.Level.TRACE;
 import static io.activej.async.util.LogUtils.toLogger;
+import static io.activej.crdt.wal.FileWriteAheadLog.FlushMode.*;
+import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
 import static java.util.Collections.singleton;
 import static java.util.Comparator.naturalOrder;
 import static java.util.stream.Collectors.toList;
@@ -55,7 +59,8 @@ import static java.util.stream.Collectors.toList;
 public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAheadLog<K, S>, EventloopService {
 	private static final Logger logger = LoggerFactory.getLogger(FileWriteAheadLog.class);
 
-	public static final String EXT = ".wal";
+	public static final String EXT_FINAL = ".wal";
+	public static final String EXT_CURRENT = ".current";
 	public static final FrameFormat FRAME_FORMAT = LZ4FrameFormat.create();
 
 	private static final int DEFAULT_SORT_ITEMS_IN_MEMORY = ApplicationSettings.getInt(FileWriteAheadLog.class, "sortItemsInMemory", 100_000);
@@ -78,6 +83,8 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 	private WalConsumer consumer;
 	private boolean stopping;
 	private boolean flushRequired;
+	private boolean scanLostFiles = true;
+	private FlushMode flushMode = UPLOAD_TO_STORAGE;
 
 	private FileWriteAheadLog(
 			Eventloop eventloop,
@@ -116,6 +123,11 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 		return this;
 	}
 
+	public FileWriteAheadLog<K, S> withFlushMode(FlushMode flushMode) {
+		this.flushMode = flushMode;
+		return this;
+	}
+
 	@Override
 	public Promise<Void> put(K key, S value) {
 		logger.trace("Putting value {} at key {}", value, key);
@@ -136,8 +148,8 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 
 	@Override
 	public @NotNull Promise<Void> start() {
-		return getWalFiles()
-				.then(this::flushWaLFiles)
+		return scanLostFiles()
+				.then(this::flushFiles)
 				.whenResult(() -> this.consumer = createConsumer());
 	}
 
@@ -151,7 +163,7 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 
 	@Nullable
 	private WalConsumer createConsumer() {
-		return stopping ? null : new WalConsumer(path.resolve(UUID.randomUUID() + EXT));
+		return stopping ? null : new WalConsumer(path.resolve(UUID.randomUUID() + EXT_CURRENT));
 	}
 
 	private Promise<Void> doFlush() {
@@ -167,10 +179,59 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 		consumer = createConsumer();
 
 		return finishedConsumer.finish()
-				.then(this::getWalFiles)
-				.then(this::flushWaLFiles)
+				.then(() -> Promise.ofBlockingRunnable(executor, () -> rename(finishedConsumer.walFile))
+						.whenException(e -> scanLostFiles = true))
+				.then(this::scanLostFiles)
+				.then(this::flushFiles)
 				.whenException(e -> flushRequired = true)
 				.whenComplete(toLogger(logger, TRACE, TRACE, "doFlush", this));
+	}
+
+	private Promise<Void> flushFiles() {
+		if (flushMode == ROTATE_FILE) {
+			return Promise.complete();
+		} else if (flushMode == ROTATE_FILE_AWAIT) {
+			return awaitExternalFlush();
+		} else {
+			assert flushMode == UPLOAD_TO_STORAGE;
+			return getWalFiles()
+					.then(this::flushWaLFiles);
+		}
+	}
+
+	private Promise<Void> scanLostFiles() {
+		if (!scanLostFiles) return Promise.complete();
+
+		return getLostFiles()
+				.then(lostFiles ->
+						Promise.ofBlockingRunnable(executor, () -> {
+							for (Path lostFile : lostFiles) {
+								rename(lostFile);
+							}
+						}))
+				.whenResult(() -> scanLostFiles = false);
+	}
+
+	private void rename(Path from) throws IOException {
+		assert from.toString().endsWith(EXT_CURRENT);
+		assert consumer == null || !from.equals(consumer.getWalFile());
+
+		String filename = from.getFileName().toString();
+		Path to = from.resolveSibling(filename.replace(EXT_CURRENT, EXT_FINAL));
+		try {
+			Files.move(from, to, ATOMIC_MOVE);
+		} catch (AtomicMoveNotSupportedException ignored) {
+			Files.move(from, to);
+		}
+	}
+
+	private Promise<Void> awaitExternalFlush() {
+		return getWalFiles()
+				.then(walFiles -> {
+					if (walFiles.isEmpty()) return Promise.complete();
+					return Promises.delay(Duration.ofSeconds(1))
+							.then(this::awaitExternalFlush);
+				});
 	}
 
 	private Promise<Void> flushWaLFiles(List<Path> walFiles) {
@@ -199,13 +260,25 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 				() -> {
 					try (Stream<Path> list = Files.list(path)) {
 						return list
-								.filter(file -> Files.isRegularFile(file) &&
-										file.toString().endsWith(EXT) &&
-										(consumer == null || !file.equals(consumer.getWalFile())))
+								.filter(file -> Files.isRegularFile(file) && file.toString().endsWith(EXT_FINAL))
 								.collect(toList());
 					}
 				})
 				.whenResult(walFiles -> logger.trace("Found {} write ahead logs {}", walFiles.size(), walFiles));
+	}
+
+	private Promise<List<Path>> getLostFiles() {
+		return Promise.ofBlockingCallable(executor,
+				() -> {
+					try (Stream<Path> list = Files.list(path)) {
+						return list
+								.filter(file -> Files.isRegularFile(file) &&
+										file.toString().endsWith(EXT_CURRENT) &&
+										(consumer == null || !file.equals(consumer.getWalFile())))
+								.collect(toList());
+					}
+				})
+				.whenResult(walFiles -> logger.trace("Found {} lost files {}", walFiles.size(), walFiles));
 	}
 
 	private Promise<Void> deleteWalFiles(Collection<Path> walFiles) {
@@ -324,5 +397,11 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 			internalSupplier.sendEndOfStream();
 			return internalSupplier.getAcknowledgement();
 		}
+	}
+
+	public enum FlushMode {
+		UPLOAD_TO_STORAGE,
+		ROTATE_FILE,
+		ROTATE_FILE_AWAIT
 	}
 }

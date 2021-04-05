@@ -34,7 +34,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
 import static io.activej.common.collection.CollectionUtils.first;
-import static io.activej.crdt.wal.FileWriteAheadLog.EXT;
+import static io.activej.crdt.wal.FileWriteAheadLog.EXT_FINAL;
 import static io.activej.crdt.wal.FileWriteAheadLog.FRAME_FORMAT;
 import static io.activej.promise.TestUtils.await;
 import static io.activej.serializer.BinarySerializers.INT_SERIALIZER;
@@ -268,7 +268,7 @@ public class FileWriteAheadLogTest {
 
 	@SafeVarargs
 	private final Path craftWALFile(CrdtData<Long, GSet<Integer>>... mockData) {
-		Path file = path.resolve(UUID.randomUUID() + EXT);
+		Path file = path.resolve(UUID.randomUUID() + EXT_FINAL);
 		await(StreamSupplier.ofChannelSupplier(ChannelSupplier.of(mockData)
 				.mapAsync(data -> Promises.delay(Duration.ofMillis(1), data)))
 				.transformWith(ChannelSerializer.create(serializer)
