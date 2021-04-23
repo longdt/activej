@@ -16,7 +16,14 @@ import io.activej.datastream.processor.StreamReducer;
 import io.activej.datastream.processor.StreamReducers;
 import io.activej.datastream.processor.StreamSorter;
 import io.activej.datastream.processor.StreamSorterStorageImpl;
+import io.activej.eventloop.Eventloop;
+import io.activej.eventloop.jmx.EventloopJmxBeanEx;
+import io.activej.jmx.api.attribute.JmxAttribute;
+import io.activej.jmx.api.attribute.JmxOperation;
+import io.activej.jmx.stats.ValueStats;
 import io.activej.promise.Promise;
+import io.activej.promise.jmx.PromiseStats;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +31,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.function.Function;
@@ -35,24 +43,32 @@ import static io.activej.crdt.wal.FileWriteAheadLog.FRAME_FORMAT;
 import static java.util.Comparator.naturalOrder;
 import static java.util.stream.Collectors.toList;
 
-public final class WalUploader<K extends Comparable<K>, S> {
+public final class WalUploader<K extends Comparable<K>, S> implements EventloopJmxBeanEx {
 	private static final Logger logger = LoggerFactory.getLogger(WalUploader.class);
 
 	private static final int DEFAULT_SORT_ITEMS_IN_MEMORY = ApplicationSettings.getInt(WalUploader.class, "sortItemsInMemory", 100_000);
+	private static final Duration SMOOTHING_WINDOW = ApplicationSettings.getDuration(WalUploader.class, "smoothingWindow", Duration.ofMinutes(5));
 
 	private final AsyncSupplier<Void> uploadToStorage = coalesce(this::doUploadToStorage);
 
+	private final Eventloop eventloop;
 	private final Executor executor;
 	private final Path path;
 	private final CrdtFunction<S> function;
 	private final CrdtDataSerializer<K, S> serializer;
 	private final CrdtStorage<K, S> storage;
 
+	private final PromiseStats uploadPromise = PromiseStats.create(SMOOTHING_WINDOW);
+	private final ValueStats totalFilesUploaded = ValueStats.create(SMOOTHING_WINDOW);
+	private final ValueStats totalFilesUploadedSize = ValueStats.create(SMOOTHING_WINDOW).withUnit("bytes");
+	private boolean detailedMonitoring;
+
 	@Nullable
 	private Path sortDir;
 	private int sortItemsInMemory = DEFAULT_SORT_ITEMS_IN_MEMORY;
 
-	private WalUploader(Executor executor, Path path, CrdtFunction<S> function, CrdtDataSerializer<K, S> serializer, CrdtStorage<K, S> storage) {
+	private WalUploader(Eventloop eventloop, Executor executor, Path path, CrdtFunction<S> function, CrdtDataSerializer<K, S> serializer, CrdtStorage<K, S> storage) {
+		this.eventloop = eventloop;
 		this.executor = executor;
 		this.path = path;
 		this.function = function;
@@ -60,8 +76,8 @@ public final class WalUploader<K extends Comparable<K>, S> {
 		this.storage = storage;
 	}
 
-	public static <K extends Comparable<K>, S> WalUploader<K, S> create(Executor executor, Path path, CrdtFunction<S> function, CrdtDataSerializer<K, S> serializer, CrdtStorage<K, S> storage) {
-		return new WalUploader<>(executor, path, function, serializer, storage);
+	public static <K extends Comparable<K>, S> WalUploader<K, S> create(Eventloop eventloop, Executor executor, Path path, CrdtFunction<S> function, CrdtDataSerializer<K, S> serializer, CrdtStorage<K, S> storage) {
+		return new WalUploader<>(eventloop, executor, path, function, serializer, storage);
 	}
 
 	public WalUploader<K, S> withSortDir(Path sortDir) {
@@ -75,7 +91,8 @@ public final class WalUploader<K extends Comparable<K>, S> {
 	}
 
 	public Promise<Void> uploadToStorage() {
-		return uploadToStorage.get();
+		return uploadToStorage.get()
+				.whenComplete(uploadPromise.recordStats());
 	}
 
 	private Promise<Void> doUploadToStorage() {
@@ -106,6 +123,18 @@ public final class WalUploader<K extends Comparable<K>, S> {
 				.transformWith(createSorter(sortDir))
 				.streamTo(storage.upload())
 				.whenComplete(() -> cleanup(sortDir))
+				.whenResult(() -> {
+					totalFilesUploaded.recordValue(walFiles.size());
+					if (detailedMonitoring) {
+						for (Path walFile : walFiles) {
+							try {
+								totalFilesUploadedSize.recordValue(Files.size(walFile));
+							} catch (IOException e) {
+								logger.warn("Could not get the size of uploaded file {}", walFile);
+							}
+						}
+					}
+				})
 				.then(() -> deleteWalFiles(executor, walFiles));
 	}
 
@@ -153,6 +182,43 @@ public final class WalUploader<K extends Comparable<K>, S> {
 
 		return reducer;
 	}
+
+	@Override
+	public @NotNull Eventloop getEventloop() {
+		return eventloop;
+	}
+
+	// region JMX
+	@JmxAttribute
+	public PromiseStats getUploadPromise() {
+		return uploadPromise;
+	}
+
+	@JmxAttribute
+	public ValueStats getTotalFilesUploaded() {
+		return totalFilesUploaded;
+	}
+
+	@JmxAttribute
+	public ValueStats getTotalFilesUploadedSize() {
+		return totalFilesUploadedSize;
+	}
+
+	@JmxAttribute
+	public boolean isDetailedMonitoring() {
+		return detailedMonitoring;
+	}
+
+	@JmxOperation
+	public void startDetailedMonitoring() {
+		detailedMonitoring = true;
+	}
+
+	@JmxOperation
+	public void stopDetailedMonitoring() {
+		detailedMonitoring = false;
+	}
+	// endregion
 
 	private final class WalReducer implements StreamReducers.Reducer<K, CrdtData<K, S>, CrdtData<K, S>, CrdtData<K, S>> {
 

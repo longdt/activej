@@ -50,6 +50,7 @@ public final class PersistentStorageModule extends AbstractModule {
 
 	@Provides
 	WalUploader<Long, DetailedSumsCrdtState> uploader(
+			Eventloop eventloop,
 			Executor executor,
 			CrdtFunction<DetailedSumsCrdtState> function,
 			CrdtDataSerializer<Long, DetailedSumsCrdtState> serializer,
@@ -57,7 +58,7 @@ public final class PersistentStorageModule extends AbstractModule {
 			Config config
 	) {
 		Path walPath = config.get(ofPath(), "wal-storage");
-		return WalUploader.create(executor, walPath, function, serializer, storage);
+		return WalUploader.create(eventloop, executor, walPath, function, serializer, storage);
 	}
 
 	@Provides
