@@ -4,6 +4,7 @@ import io.activej.async.function.AsyncSupplier;
 import io.activej.async.function.AsyncSuppliers;
 import io.activej.async.service.EventloopService;
 import io.activej.bytebuf.ByteBuf;
+import io.activej.common.ApplicationSettings;
 import io.activej.crdt.CrdtData;
 import io.activej.crdt.util.CrdtDataSerializer;
 import io.activej.csp.ChannelConsumer;
@@ -15,9 +16,15 @@ import io.activej.datastream.AbstractStreamSupplier;
 import io.activej.datastream.StreamConsumer;
 import io.activej.datastream.csp.ChannelSerializer;
 import io.activej.eventloop.Eventloop;
+import io.activej.eventloop.jmx.EventloopJmxBeanEx;
+import io.activej.jmx.api.attribute.JmxAttribute;
+import io.activej.jmx.api.attribute.JmxOperation;
+import io.activej.jmx.stats.EventStats;
+import io.activej.jmx.stats.ValueStats;
 import io.activej.promise.Promise;
 import io.activej.promise.Promises;
 import io.activej.promise.SettablePromise;
+import io.activej.promise.jmx.PromiseStats;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
@@ -43,12 +50,14 @@ import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
 import static java.util.Collections.singleton;
 import static java.util.stream.Collectors.toList;
 
-public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAheadLog<K, S>, EventloopService {
+public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAheadLog<K, S>, EventloopService, EventloopJmxBeanEx {
 	private static final Logger logger = LoggerFactory.getLogger(FileWriteAheadLog.class);
 
 	public static final String EXT_FINAL = ".wal";
 	public static final String EXT_CURRENT = ".current";
 	public static final FrameFormat FRAME_FORMAT = LZ4FrameFormat.create();
+
+	private static final Duration SMOOTHING_WINDOW = ApplicationSettings.getDuration(FileWriteAheadLog.class, "smoothingWindow", Duration.ofMinutes(5));
 
 	private final Eventloop eventloop;
 	private final Executor executor;
@@ -64,6 +73,15 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 	private boolean stopping;
 	private boolean flushRequired;
 	private boolean scanLostFiles = true;
+
+	// region JMX
+	private final PromiseStats putPromise = PromiseStats.create(SMOOTHING_WINDOW);
+	private final PromiseStats flushPromise = PromiseStats.create(SMOOTHING_WINDOW);
+	private final EventStats totalPuts = EventStats.create(SMOOTHING_WINDOW);
+	private final EventStats totalFlushes = EventStats.create(SMOOTHING_WINDOW);
+	private final ValueStats totalFlushedSize = ValueStats.create(SMOOTHING_WINDOW).withUnit("bytes");
+	private boolean detailedMonitoring;
+	// endregion
 
 	private FileWriteAheadLog(
 			Eventloop eventloop,
@@ -109,14 +127,18 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 	@Override
 	public Promise<Void> put(K key, S value) {
 		logger.trace("Putting value {} at key {}", value, key);
+		totalPuts.recordEvent();
+
 		flushRequired = true;
-		return consumer.accept(new CrdtData<>(key, value));
+		return consumer.accept(new CrdtData<>(key, value))
+				.whenComplete(putPromise.recordStats());
 	}
 
 	@Override
 	public Promise<Void> flush() {
 		logger.trace("Flush called");
-		return flush.get();
+		return flush.get()
+				.whenComplete(flushPromise.recordStats());
 	}
 
 	@Override
@@ -150,11 +172,20 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 			return Promise.complete();
 		}
 		flushRequired = false;
+		totalFlushes.recordEvent();
 
 		logger.trace("Begin flushing write ahead log");
 
 		WalConsumer finishedConsumer = consumer;
 		consumer = createConsumer();
+
+		if (detailedMonitoring){
+			try {
+				totalFlushedSize.recordValue(Files.size(finishedConsumer.walFile));
+			} catch (IOException e){
+				logger.warn("Could not get the size of flushed file {}", finishedConsumer.walFile);
+			}
+		}
 
 		return finishedConsumer.finish()
 				.then(() -> Promise.ofBlockingRunnable(executor, () -> rename(finishedConsumer.walFile))
@@ -282,4 +313,46 @@ public class FileWriteAheadLog<K extends Comparable<K>, S> implements WriteAhead
 		ROTATE_FILE,
 		ROTATE_FILE_AWAIT
 	}
+
+	// region JMX
+	@JmxAttribute
+	public PromiseStats getPutPromise() {
+		return putPromise;
+	}
+
+	@JmxAttribute
+	public PromiseStats getFlushPromise() {
+		return flushPromise;
+	}
+
+	@JmxAttribute
+	public EventStats getTotalPuts() {
+		return totalPuts;
+	}
+
+	@JmxAttribute
+	public EventStats getTotalFlushes() {
+		return totalFlushes;
+	}
+
+	@JmxAttribute
+	public ValueStats getTotalFlushedSize() {
+		return totalFlushedSize;
+	}
+
+	@JmxAttribute
+	public boolean isDetailedMonitoring() {
+		return detailedMonitoring;
+	}
+
+	@JmxOperation
+	public void startDetailedMonitoring(){
+		detailedMonitoring = true;
+	}
+
+	@JmxOperation
+	public void stopDetailedMonitoring(){
+		detailedMonitoring = false;
+	}
+	// endregion
 }
