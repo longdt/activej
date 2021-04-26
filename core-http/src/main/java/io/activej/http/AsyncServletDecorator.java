@@ -34,7 +34,7 @@ import static java.util.Arrays.asList;
 public interface AsyncServletDecorator {
 	@NotNull AsyncServlet serve(@NotNull AsyncServlet servlet);
 
-	default @NotNull AsyncServlet serveFirstSuccessful(@NotNull AsyncServlet... servlets) {
+	default @NotNull AsyncServlet serveFirstSuccessful(AsyncServlet... servlets) {
 		return serve(firstSuccessful(servlets));
 	}
 

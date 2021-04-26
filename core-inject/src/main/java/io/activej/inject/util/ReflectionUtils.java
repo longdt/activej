@@ -335,12 +335,10 @@ public final class ReflectionUtils {
 				});
 	}
 
-	@NotNull
 	public static Dependency[] toDependencies(@Nullable Type container, Parameter[] parameters) {
 		return toDependencies(container, null, parameters);
 	}
 
-	@NotNull
 	public static Dependency[] toDependencies(@Nullable Type container, @Nullable Object containerInstance, Parameter[] parameters) {
 		Dependency[] dependencies = new Dependency[parameters.length];
 		if (parameters.length == 0) {

@@ -137,7 +137,7 @@ public final class RpcStrategyRendezvousHashing implements RpcStrategy {
 		private final HashFunction<?> hashFunction;
 		private final RpcSender[] hashBuckets;
 
-		Sender(@NotNull HashFunction<?> hashFunction, @NotNull RpcSender[] hashBuckets) {
+		Sender(@NotNull HashFunction<?> hashFunction, RpcSender[] hashBuckets) {
 			this.hashFunction = hashFunction;
 			this.hashBuckets = hashBuckets;
 		}

@@ -1014,7 +1014,7 @@ public final class SerializerBuilder {
 		final SerializerForType[] generics;
 		final List<SerializerDefBuilder> mods;
 
-		private Key(@NotNull Class<?> type, @NotNull SerializerForType[] generics, @NotNull List<SerializerDefBuilder> mods) {
+		private Key(@NotNull Class<?> type, SerializerForType[] generics, @NotNull List<SerializerDefBuilder> mods) {
 			this.type = type;
 			this.generics = generics;
 			this.mods = mods;

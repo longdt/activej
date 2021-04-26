@@ -47,17 +47,17 @@ public interface ModuleBuilder0<T> extends ModuleBuilder {
 	/**
 	 * The binding being built by this builder will be added to the binding graph trie at given scope path
 	 */
-	ModuleBuilder0<T> in(@NotNull Scope[] scope);
+	ModuleBuilder0<T> in(Scope[] scope);
 
 	/**
 	 * @see #in(Scope[])
 	 */
-	ModuleBuilder0<T> in(@NotNull Scope scope, @NotNull Scope... scopes);
+	ModuleBuilder0<T> in(@NotNull Scope scope, Scope... scopes);
 
 	/**
 	 * @see #in(Scope[])
 	 */
-	ModuleBuilder0<T> in(@NotNull Class<? extends Annotation> annotationClass, @NotNull Class<?>... annotationClasses);
+	ModuleBuilder0<T> in(@NotNull Class<? extends Annotation> annotationClass, Class<?>... annotationClasses);
 
 	/**
 	 * Sets a binding which would be bound to a given key and added to the binding graph trie
@@ -105,21 +105,21 @@ public interface ModuleBuilder0<T> extends ModuleBuilder {
 	/**
 	 * DSL shortcut for creating a binding and {@link #to(Binding) binding it} to current key.
 	 */
-	default ModuleBuilder0<T> to(@NotNull ConstructorN<? extends T> factory, @NotNull Class<?>[] dependencies) {
+	default ModuleBuilder0<T> to(@NotNull ConstructorN<? extends T> factory, Class<?>[] dependencies) {
 		return to(Binding.to(factory, dependencies));
 	}
 
 	/**
 	 * DSL shortcut for creating a binding and {@link #to(Binding) binding it} to current key.
 	 */
-	default ModuleBuilder0<T> to(@NotNull ConstructorN<? extends T> factory, @NotNull Key<?>[] dependencies) {
+	default ModuleBuilder0<T> to(@NotNull ConstructorN<? extends T> factory, Key<?>[] dependencies) {
 		return to(Binding.to(factory, dependencies));
 	}
 
 	/**
 	 * DSL shortcut for creating a binding and {@link #to(Binding) binding it} to current key.
 	 */
-	default ModuleBuilder0<T> to(@NotNull ConstructorN<? extends T> factory, @NotNull Dependency[] dependencies) {
+	default ModuleBuilder0<T> to(@NotNull ConstructorN<? extends T> factory, Dependency[] dependencies) {
 		return to(Binding.to(factory, dependencies));
 	}
 

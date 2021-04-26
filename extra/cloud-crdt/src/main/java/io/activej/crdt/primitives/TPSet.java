@@ -83,7 +83,7 @@ public final class TPSet<E> implements Set<E>, CrdtMergable<TPSet<E>> {
 
 	@SuppressWarnings("SuspiciousToArrayCall")
 	@Override
-	public <T> T[] toArray(@NotNull T[] a) {
+	public <T> T[] toArray(T[] a) {
 		return stream().toArray($ -> a);
 	}
 

@@ -170,7 +170,7 @@ public final class RpcClient implements IRpcClient, EventloopService, WithInitia
 	 * @param messageTypes classes of messages processed by a server
 	 * @return client instance capable for handling provided message types
 	 */
-	public RpcClient withMessageTypes(@NotNull Class<?>... messageTypes) {
+	public RpcClient withMessageTypes(Class<?>... messageTypes) {
 		return withMessageTypes(Arrays.asList(messageTypes));
 	}
 

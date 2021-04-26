@@ -108,7 +108,7 @@ public final class LWWSet<E> implements Set<E>, CrdtType<LWWSet<E>> {
 
 	@SuppressWarnings("SuspiciousToArrayCall")
 	@Override
-	public <T> T[] toArray(@NotNull T[] a) {
+	public <T> T[] toArray(T[] a) {
 		return stream().toArray($ -> a);
 	}
 

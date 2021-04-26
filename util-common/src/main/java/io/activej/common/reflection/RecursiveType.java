@@ -35,12 +35,11 @@ public final class RecursiveType {
 
 	@NotNull
 	private final Class<?> clazz;
-	@NotNull
 	private final RecursiveType[] typeParams;
 
 	private final int arrayDimension;
 
-	private RecursiveType(@NotNull Class<?> clazz, @NotNull RecursiveType[] typeParams, int arrayDimension) {
+	private RecursiveType(@NotNull Class<?> clazz, RecursiveType[] typeParams, int arrayDimension) {
 		this.clazz = clazz;
 		this.typeParams = typeParams;
 		this.arrayDimension = arrayDimension;
@@ -52,7 +51,7 @@ public final class RecursiveType {
 	}
 
 	@NotNull
-	public static RecursiveType of(@NotNull Class<?> clazz, @NotNull RecursiveType... typeParams) {
+	public static RecursiveType of(@NotNull Class<?> clazz, RecursiveType... typeParams) {
 		return new RecursiveType(clazz, typeParams, clazz.isArray() ? 1 : 0);
 	}
 
@@ -93,7 +92,6 @@ public final class RecursiveType {
 		return clazz;
 	}
 
-	@NotNull
 	public RecursiveType[] getTypeParams() {
 		return typeParams;
 	}
@@ -131,7 +129,6 @@ public final class RecursiveType {
 				.toArray(new Type[]{});
 
 		ParameterizedType parameterized = new ParameterizedType() {
-			@NotNull
 			@Override
 			public Type[] getActualTypeArguments() {
 				return types;

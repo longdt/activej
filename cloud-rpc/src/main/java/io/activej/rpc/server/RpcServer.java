@@ -138,7 +138,7 @@ public final class RpcServer extends AbstractServer<RpcServer> {
 	 * @param messageTypes classes of messages processed by a server
 	 * @return server instance capable for handling provided message types
 	 */
-	public RpcServer withMessageTypes(@NotNull Class<?>... messageTypes) {
+	public RpcServer withMessageTypes(Class<?>... messageTypes) {
 		return withMessageTypes(asList(messageTypes));
 	}
 

@@ -99,16 +99,16 @@ public final class Binding<T> {
 		return new Binding<>(singleton(Dependency.toKey(key)), new PlainCompiler<>(key));
 	}
 
-	public static <R> Binding<R> to(@NotNull ConstructorN<R> constructor, @NotNull Class<?>[] types) {
+	public static <R> Binding<R> to(@NotNull ConstructorN<R> constructor, Class<?>[] types) {
 		return Binding.to(constructor, Stream.of(types).map(Key::of).map(Dependency::toKey).toArray(Dependency[]::new));
 	}
 
-	public static <R> Binding<R> to(@NotNull ConstructorN<R> constructor, @NotNull Key<?>[] keys) {
+	public static <R> Binding<R> to(@NotNull ConstructorN<R> constructor, Key<?>[] keys) {
 		return Binding.to(constructor, Stream.of(keys).map(Dependency::toKey).toArray(Dependency[]::new));
 	}
 
 	@SuppressWarnings("Duplicates")
-	public static <R> Binding<R> to(@NotNull ConstructorN<R> constructor, @NotNull Dependency[] dependencies) {
+	public static <R> Binding<R> to(@NotNull ConstructorN<R> constructor, Dependency[] dependencies) {
 		if (dependencies.length == 0) {
 			return to(constructor::create);
 		}
@@ -653,15 +653,15 @@ public final class Binding<T> {
 						}, threadsafe, scope, slot), location);
 	}
 
-	public Binding<T> addDependencies(@NotNull Class<?>... extraDependencies) {
+	public Binding<T> addDependencies(Class<?>... extraDependencies) {
 		return addDependencies(Stream.of(extraDependencies).map(Key::of).map(Dependency::toKey).toArray(Dependency[]::new));
 	}
 
-	public Binding<T> addDependencies(@NotNull Key<?>... extraDependencies) {
+	public Binding<T> addDependencies(Key<?>... extraDependencies) {
 		return addDependencies(Stream.of(extraDependencies).map(Dependency::toKey).toArray(Dependency[]::new));
 	}
 
-	public Binding<T> addDependencies(@NotNull Dependency... extraDependencies) {
+	public Binding<T> addDependencies(Dependency... extraDependencies) {
 		return addDependencies(Stream.of(extraDependencies).collect(toSet()));
 	}
 
