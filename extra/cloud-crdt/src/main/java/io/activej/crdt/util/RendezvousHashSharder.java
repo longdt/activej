@@ -16,41 +16,40 @@
 
 package io.activej.crdt.util;
 
+import io.activej.common.ApplicationSettings;
 import io.activej.common.HashUtils;
+import io.activej.common.ref.RefInt;
 
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
 
 import static io.activej.common.Checks.checkArgument;
 import static java.util.stream.Collectors.toList;
 
-public final class RendezvousHashSharder<I, K> {
+public final class RendezvousHashSharder {
+	public static final int NUMBER_OF_BUCKETS = ApplicationSettings.getInt(RendezvousHashSharder.class, "numberOfBuckets", 1024);
 
-	private int numOfBuckets = 1024;
+	static {
+		checkArgument((NUMBER_OF_BUCKETS & (NUMBER_OF_BUCKETS - 1)) == 0, "Number of buckets must be a power of two");
+	}
+
 	private int[][] buckets;
 
 	private RendezvousHashSharder() {
 	}
 
-	public static <I, K> RendezvousHashSharder<I, K> create(List<I> partitionIds, int topShards) {
-		RendezvousHashSharder<I, K> sharder = new RendezvousHashSharder<>();
+	public static RendezvousHashSharder create(Set<? extends Comparable<?>> partitionIds, int topShards) {
+		RendezvousHashSharder sharder = new RendezvousHashSharder();
 		sharder.recompute(partitionIds, topShards);
 		return sharder;
 	}
 
-	public RendezvousHashSharder<I, K> withNumberOfBuckets(int numOfBuckets) {
-		checkArgument((numOfBuckets & (numOfBuckets - 1)) == 0, "Number of buckets must be a power of two");
-
-		this.numOfBuckets = numOfBuckets;
-		return this;
-	}
-
-	public void recompute(List<I> partitionIds, int topShards) {
+	public void recompute(Set<? extends Comparable<?>> partitionIds, int topShards) {
 		checkArgument(topShards > 0, "Top number of partitions must be positive");
-		checkArgument(topShards <= partitionIds.size(), "Top number of partitions must less than or equal to number of partitions");
+		checkArgument(topShards <= partitionIds.size(), "Top number of partitions must be less than or equal to number of partitions");
 
-		buckets = new int[numOfBuckets][topShards];
+		buckets = new int[NUMBER_OF_BUCKETS][topShards];
 
 		class ObjWithIndex<O> {
 			final O object;
@@ -61,15 +60,16 @@ public final class RendezvousHashSharder<I, K> {
 				this.index = index;
 			}
 		}
-		List<ObjWithIndex<I>> indexed = new ArrayList<>();
-		for (int i = 0; i < partitionIds.size(); i++) {
-			indexed.add(new ObjWithIndex<>(partitionIds.get(i), i));
-		}
+		RefInt indexRef = new RefInt(0);
+		List<ObjWithIndex<Object>> indexed = partitionIds.stream()
+				.sorted()
+				.map(partitionId -> new ObjWithIndex<>((Object) partitionId, indexRef.value++))
+				.collect(toList());
 
 		for (int n = 0; n < buckets.length; n++) {
 			int finalN = n;
-			List<ObjWithIndex<I>> copy = indexed.stream()
-					.sorted(Comparator.<ObjWithIndex<I>>comparingInt(x -> HashUtils.murmur3hash(x.object.hashCode(), finalN)).reversed())
+			List<ObjWithIndex<Object>> copy = indexed.stream()
+					.sorted(Comparator.<ObjWithIndex<Object>>comparingInt(x -> HashUtils.murmur3hash(x.object.hashCode(), finalN)).reversed())
 					.collect(toList());
 
 			for (int i = 0; i < topShards; i++) {
@@ -78,7 +78,7 @@ public final class RendezvousHashSharder<I, K> {
 		}
 	}
 
-	public int[] shard(K key) {
-		return buckets[key.hashCode() & (numOfBuckets - 1)];
+	public int[] shard(Object key) {
+		return buckets[key.hashCode() & (NUMBER_OF_BUCKETS - 1)];
 	}
 }

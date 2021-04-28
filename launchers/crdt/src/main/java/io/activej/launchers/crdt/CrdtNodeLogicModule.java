@@ -20,6 +20,7 @@ import io.activej.common.reflection.RecursiveType;
 import io.activej.config.Config;
 import io.activej.crdt.CrdtServer;
 import io.activej.crdt.storage.CrdtStorage;
+import io.activej.crdt.storage.cluster.CrdtPartitions;
 import io.activej.crdt.storage.cluster.CrdtRepartitionController;
 import io.activej.crdt.storage.cluster.CrdtStorageCluster;
 import io.activej.crdt.storage.local.CrdtStorageFs;
@@ -79,16 +80,20 @@ public abstract class CrdtNodeLogicModule<K extends Comparable<K>, S> extends Ab
 	}
 
 	@Provides
-	CrdtStorageCluster<String, K, S> clusterCrdtClient(Config config, CrdtStorageMap<K, S> localClient, CrdtDescriptor<K, S> descriptor) {
+	CrdtPartitions<K, S> partitions(Eventloop eventloop, CrdtStorageMap<K, S> localClient, Config config){
+		return CrdtPartitions.create(eventloop, singletonMap(config.get("crdt.cluster.localPartitionId"), localClient));
+	}
+
+	@Provides
+	CrdtStorageCluster<K, S> clusterCrdtClient(Config config, CrdtPartitions<K, S> partitions, CrdtStorageMap<K, S> localClient, CrdtDescriptor<K, S> descriptor) {
 		return CrdtStorageCluster.create(
-				localClient.getEventloop(),
-				singletonMap(config.get("crdt.cluster.localPartitionId"), localClient),
+				partitions,
 				descriptor.getCrdtFunction())
 				.withInitializer(ofCrdtCluster(config.getChild("crdt.cluster"), localClient, descriptor));
 	}
 
 	@Provides
-	CrdtRepartitionController<String, K, S> crdtRepartitionController(CrdtStorageCluster<String, K, S> clusterClient, Config config) {
+	CrdtRepartitionController<K, S> crdtRepartitionController(CrdtStorageCluster<K, S> clusterClient, Config config) {
 		return CrdtRepartitionController.create(clusterClient, config.get("crdt.cluster.localPartitionId"));
 	}
 
@@ -100,7 +105,7 @@ public abstract class CrdtNodeLogicModule<K extends Comparable<K>, S> extends Ab
 
 	@Provides
 	@Cluster
-	CrdtServer<K, S> clusterServer(Eventloop eventloop, CrdtStorageCluster<String, K, S> client, CrdtDescriptor<K, S> descriptor, Config config) {
+	CrdtServer<K, S> clusterServer(Eventloop eventloop, CrdtStorageCluster<K, S> client, CrdtDescriptor<K, S> descriptor, Config config) {
 		return CrdtServer.create(eventloop, client, descriptor.getSerializer())
 				.withInitializer(ofAbstractServer(config.getChild("crdt.cluster.server")));
 	}

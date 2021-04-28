@@ -25,7 +25,6 @@ import io.activej.crdt.function.CrdtFilter;
 import io.activej.crdt.function.CrdtFunction;
 import io.activej.crdt.primitives.CrdtType;
 import io.activej.crdt.storage.CrdtStorage;
-import io.activej.crdt.util.RendezvousHashSharder;
 import io.activej.datastream.StreamConsumer;
 import io.activej.datastream.StreamDataAcceptor;
 import io.activej.datastream.StreamSupplier;
@@ -45,28 +44,33 @@ import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.*;
+import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
 
-import static io.activej.async.util.LogUtils.toLogger;
+import static io.activej.common.Checks.checkArgument;
 import static io.activej.crdt.util.Utils.wrapException;
 import static java.util.stream.Collectors.toList;
 
 @SuppressWarnings("rawtypes") // JMX
-public final class CrdtStorageCluster<I extends Comparable<I>, K extends Comparable<K>, S> implements CrdtStorage<K, S>, WithInitializer<CrdtStorageCluster<I, K, S>>, EventloopService, EventloopJmxBeanEx {
+public final class CrdtStorageCluster<K extends Comparable<K>, S> implements CrdtStorage<K, S>, WithInitializer<CrdtStorageCluster<K, S>>, EventloopService, EventloopJmxBeanEx {
 	private static final Logger logger = LoggerFactory.getLogger(CrdtStorageCluster.class);
 
-	private final Eventloop eventloop;
-	private final Map<I, CrdtStorage<K, S>> clients;
-	private final Map<I, CrdtStorage<K, S>> aliveClients;
-	private final Map<I, CrdtStorage<K, S>> deadClients;
+	private final CrdtPartitions<K, S> partitions;
 
 	private final CrdtFunction<S> function;
-	private final RendezvousHashSharder<I, K> shardingFunction;
 
-	private List<I> orderedIds;
+	/**
+	 * Maximum allowed number of dead partitions, if there are more dead partitions than this number,
+	 * the cluster is considered malformed.
+	 */
+	private int deadPartitionsThreshold = 0;
 
-	private int replicationCount = 1;
+	/**
+	 * Number of uploads that are initiated.
+	 */
+	private int uploadTargets = 1;
+
 	private CrdtFilter<S> filter;
 
 	// region JMX
@@ -81,137 +85,72 @@ public final class CrdtStorageCluster<I extends Comparable<I>, K extends Compara
 	// endregion
 
 	// region creators
-	private CrdtStorageCluster(Eventloop eventloop, Map<I, CrdtStorage<K, S>> clients, CrdtFunction<S> function) {
-		this.eventloop = eventloop;
-		this.clients = clients;
-		this.aliveClients = new LinkedHashMap<>(clients); // to keep order for indexed sharding
-		this.deadClients = new HashMap<>();
+	private CrdtStorageCluster(CrdtPartitions<K, S> partitions, CrdtFunction<S> function) {
+		this.partitions = partitions;
 		this.function = function;
-		shardingFunction = RendezvousHashSharder.create(orderedIds = new ArrayList<>(aliveClients.keySet()), replicationCount);
 	}
 
-	public static <I extends Comparable<I>, K extends Comparable<K>, S> CrdtStorageCluster<I, K, S> create(
-			Eventloop eventloop, Map<I, ? extends CrdtStorage<K, S>> clients, CrdtFunction<S> crdtFunction
+	public static <K extends Comparable<K>, S> CrdtStorageCluster<K, S> create(
+			CrdtPartitions<K, S> partitions, CrdtFunction<S> crdtFunction
 	) {
-		return new CrdtStorageCluster<>(eventloop, new HashMap<>(clients), crdtFunction);
+		return new CrdtStorageCluster<>(partitions, crdtFunction);
 	}
 
-	public static <I extends Comparable<I>, K extends Comparable<K>, S extends CrdtType<S>> CrdtStorageCluster<I, K, S> create(
-			Eventloop eventloop, Map<I, ? extends CrdtStorage<K, S>> clients
+	public static <K extends Comparable<K>, S extends CrdtType<S>> CrdtStorageCluster<K, S> create(
+			CrdtPartitions<K, S> partitions
 	) {
-		return new CrdtStorageCluster<>(eventloop, new HashMap<>(clients), CrdtFunction.ofCrdtType());
+		return new CrdtStorageCluster<>(partitions, CrdtFunction.ofCrdtType());
 	}
 
-	@SuppressWarnings("UnusedReturnValue")
-	public CrdtStorageCluster<I, K, S> withPartition(I partitionId, CrdtStorage<K, S> client) {
-		clients.put(partitionId, client);
-		aliveClients.put(partitionId, client);
-		recompute();
+	public CrdtStorageCluster<K, S> withReplicationCount(int replicationCount) {
+		checkArgument(1 <= replicationCount && replicationCount <= partitions.getPartitions().size(),
+				"Replication count cannot be less than one or greater than number of partitions");
+		this.deadPartitionsThreshold = replicationCount - 1;
+		this.uploadTargets = replicationCount;
+		this.partitions.setTopShards(replicationCount);
 		return this;
 	}
 
-	public CrdtStorageCluster<I, K, S> withReplicationCount(int replicationCount) {
-		this.replicationCount = replicationCount;
-		recompute();
-		return this;
-	}
-
-	public CrdtStorageCluster<I, K, S> withFilter(CrdtFilter<S> filter) {
+	public CrdtStorageCluster<K, S> withFilter(CrdtFilter<S> filter) {
 		this.filter = filter;
 		return this;
 	}
-	// endregion
 
-	// region getters
-	public Map<I, ? extends CrdtStorage<K, S>> getClients() {
-		return Collections.unmodifiableMap(clients);
-	}
-
-	public Map<I, CrdtStorage<K, S>> getAliveClients() {
-		return Collections.unmodifiableMap(aliveClients);
-	}
-
-	public Map<I, CrdtStorage<K, S>> getDeadClients() {
-		return Collections.unmodifiableMap(deadClients);
-	}
-
-	public List<I> getOrderedIds() {
-		return Collections.unmodifiableList(orderedIds);
-	}
-
-	public RendezvousHashSharder<I, K> getShardingFunction() {
-		return shardingFunction;
+	/**
+	 * Sets the replication count as well as number of upload targets that determines the number of server where CRDT data will be uploaded.
+	 */
+	@SuppressWarnings("UnusedReturnValue")
+	public CrdtStorageCluster<K, S> withPersistenceOptions(int deadPartitionsThreshold, int uploadTargets) {
+		checkArgument(0 <= deadPartitionsThreshold && deadPartitionsThreshold < partitions.getPartitions().size(),
+				"Dead partitions threshold cannot be less than zero or greater than number of partitions");
+		checkArgument(0 <= uploadTargets,
+				"Number of upload targets should not be less than zero");
+		checkArgument(uploadTargets <= partitions.getPartitions().size(),
+				"Number of upload targets should not exceed total number of partitions");
+		this.deadPartitionsThreshold = deadPartitionsThreshold;
+		this.uploadTargets = uploadTargets;
+		return this;
 	}
 	// endregion
 
 	@NotNull
 	@Override
 	public Eventloop getEventloop() {
-		return eventloop;
+		return partitions.getEventloop();
 	}
 
-	public Promise<Void> checkAllPartitions() {
-		return Promises.all(clients.entrySet().stream()
-				.map(entry -> {
-					I id = entry.getKey();
-					return entry.getValue()
-							.ping()
-							.mapEx(($, e) -> {
-								if (e == null) {
-									markAlive(id);
-								} else {
-									markDead(id, e);
-								}
-								return null;
-							});
-				}))
-				.whenComplete(toLogger(logger, "checkAllPartitions"));
-	}
-
-	public Promise<Void> checkDeadPartitions() {
-		return Promises.all(deadClients.entrySet().stream()
-				.map(e -> e.getValue()
-						.ping()
-						.mapEx(($, exc) -> {
-							if (exc == null) {
-								markAlive(e.getKey());
-							}
-							return null;
-						})))
-				.whenComplete(toLogger(logger, "checkDeadPartitions"));
-	}
-
-	private void markAlive(I partitionId) {
-		CrdtStorage<K, S> removed = deadClients.remove(partitionId);
-		if (removed != null) {
-			aliveClients.put(partitionId, removed);
-			recompute();
-			logger.info("Marked partition {} as alive", partitionId);
-		}
-	}
-
-	public void markDead(I partitionId, Throwable err) {
-		CrdtStorage<K, S> removed = aliveClients.remove(partitionId);
-		if (removed != null) {
-			deadClients.put(partitionId, removed);
-			recompute();
-			logger.warn("Marked partition {} as dead", partitionId, err);
-		}
-	}
-
-	private void recompute() {
-		shardingFunction.recompute(orderedIds = new ArrayList<>(aliveClients.keySet()), replicationCount);
-	}
-
-	private <T> Promise<List<T>> connect(Function<CrdtStorage<K, S>, Promise<T>> method) {
+	private <T> Promise<List<Container<T>>> connect(Function<CrdtStorage<K, S>, Promise<T>> method) {
 		return Promises.toList(
-				aliveClients.entrySet().stream()
+				partitions.getAlivePartitions().entrySet().stream()
 						.map(entry ->
 								method.apply(entry.getValue())
-										.whenException(err -> markDead(entry.getKey(), err))
+										.map(t -> new Container<>(entry.getKey(), t))
+
+										.whenException(err -> partitions.markDead(entry.getKey(), err))
 										.toTry()))
+				.then(this::checkStillNotDead)
 				.then(tries -> {
-					List<T> successes = tries.stream()
+					List<Container<T>> successes = tries.stream()
 							.filter(Try::isSuccess)
 							.map(Try::get)
 							.collect(toList());
@@ -225,31 +164,30 @@ public final class CrdtStorageCluster<I extends Comparable<I>, K extends Compara
 	@Override
 	public Promise<StreamConsumer<CrdtData<K, S>>> upload() {
 		return connect(CrdtStorage::upload)
-				.then(consumers -> {
+				.map(containers -> {
 					StreamSplitter<CrdtData<K, S>, CrdtData<K, S>> splitter = StreamSplitter.create(
 							(item, acceptors) -> {
-								for (int index : shardingFunction.shard(item.getKey())) {
+								for (int index : partitions.shard(item.getKey())) {
 									acceptors[index].accept(item);
 								}
 							});
-					for (StreamConsumer<CrdtData<K, S>> consumer : consumers) {
-						splitter.newOutput().streamTo(consumer);
+					for (Container<StreamConsumer<CrdtData<K, S>>> container : containers) {
+						splitter.newOutput().streamTo(container.value);
 					}
-					return Promise.of(splitter.getInput()
+					return splitter.getInput()
 							.transformWith(detailedStats ? uploadStats : uploadStatsDetailed)
 							.withAcknowledgement(ack -> ack
-									.thenEx(wrapException(() -> "Cluster 'upload' failed")))
-					);
+									.thenEx(wrapException(() -> "Cluster 'upload' failed")));
 				});
 	}
 
 	@Override
 	public Promise<StreamSupplier<CrdtData<K, S>>> download(long timestamp) {
 		return connect(storage -> storage.download(timestamp))
-				.then(suppliers -> {
+				.map(containers -> {
 					StreamReducer<K, CrdtData<K, S>, CrdtData<K, S>> streamReducer = StreamReducer.create();
-					for (StreamSupplier<CrdtData<K, S>> supplier : suppliers) {
-						supplier.streamTo(streamReducer.newInput(CrdtData::getKey, filter == null ?
+					for (Container<StreamSupplier<CrdtData<K, S>>> container : containers) {
+						container.value.streamTo(streamReducer.newInput(CrdtData::getKey, filter == null ?
 								new BinaryAccumulatorReducer<>((a, b) -> new CrdtData<>(a.getKey(), function.merge(a.getState(), b.getState()))) :
 								new BinaryAccumulatorReducer<K, CrdtData<K, S>>((a, b) -> new CrdtData<>(a.getKey(), function.merge(a.getState(), b.getState()))) {
 									@Override
@@ -258,28 +196,27 @@ public final class CrdtStorageCluster<I extends Comparable<I>, K extends Compara
 									}
 								}));
 					}
-					return Promise.of(streamReducer.getOutput()
+					return streamReducer.getOutput()
 							.transformWith(detailedStats ? downloadStats : downloadStatsDetailed)
 							.withEndOfStream(eos -> eos
-									.thenEx(wrapException(() -> "Cluster 'download' failed")))
-					);
+									.thenEx(wrapException(() -> "Cluster 'download' failed")));
 				});
 	}
 
 	@Override
 	public Promise<StreamConsumer<K>> remove() {
 		return connect(CrdtStorage::remove)
-				.then(successes -> {
+				.map(containers -> {
 					StreamSplitter<K, K> splitter = StreamSplitter.create((item, acceptors) -> {
 						for (StreamDataAcceptor<K> acceptor : acceptors) {
 							acceptor.accept(item);
 						}
 					});
-					successes.forEach(consumer -> splitter.newOutput().streamTo(consumer));
-					return Promise.of(splitter.getInput()
+					containers.forEach(container -> splitter.newOutput().streamTo(container.value));
+					return splitter.getInput()
 							.transformWith(detailedStats ? removeStats : removeStatsDetailed)
 							.withAcknowledgement(ack -> ack
-									.thenEx(wrapException(() -> "Cluster 'remove' failed"))));
+									.thenEx(wrapException(() -> "Cluster 'remove' failed")));
 				});
 	}
 
@@ -300,10 +237,29 @@ public final class CrdtStorageCluster<I extends Comparable<I>, K extends Compara
 		return Promise.complete();
 	}
 
+	private <T> Promise<T> checkStillNotDead(T value) {
+		Map<Comparable<?>, CrdtStorage<K, S>> deadPartitions = partitions.getDeadPartitions();
+		if (deadPartitions.size() > deadPartitionsThreshold) {
+			return Promise.ofException(new CrdtException("There are more dead partitions than allowed(" +
+					deadPartitions.size() + " dead, threshold is " + deadPartitionsThreshold + "), aborting"));
+		}
+		return Promise.of(value);
+	}
+
 	// region JMX
 	@JmxAttribute
-	public int getReplicationCount() {
-		return replicationCount;
+	public int getDeadPartitionsThreshold() {
+		return deadPartitionsThreshold;
+	}
+
+	@JmxAttribute
+	public int getUploadTargets() {
+		return uploadTargets;
+	}
+
+	@JmxOperation
+	public void setPersistenceOptions(int deadPartitionsThreshold, int uploadTargets) {
+		withPersistenceOptions(deadPartitionsThreshold, uploadTargets);
 	}
 
 	@JmxAttribute
@@ -311,28 +267,14 @@ public final class CrdtStorageCluster<I extends Comparable<I>, K extends Compara
 		withReplicationCount(replicationCount);
 	}
 
-	@JmxAttribute
-	public int getAlivePartitionCount() {
-		return aliveClients.size();
+	@JmxAttribute(name = "")
+	public CrdtPartitions<K, S> getPartitions() {
+		return partitions;
 	}
 
 	@JmxAttribute
-	public int getDeadPartitionCount() {
-		return deadClients.size();
-	}
-
-	@JmxAttribute
-	public String[] getAlivePartitions() {
-		return aliveClients.keySet().stream()
-				.map(Object::toString)
-				.toArray(String[]::new);
-	}
-
-	@JmxAttribute
-	public String[] getDeadPartitions() {
-		return deadClients.keySet().stream()
-				.map(Object::toString)
-				.toArray(String[]::new);
+	public boolean isDetailedStats() {
+		return detailedStats;
 	}
 
 	@JmxOperation
@@ -375,4 +317,14 @@ public final class CrdtStorageCluster<I extends Comparable<I>, K extends Compara
 		return removeStatsDetailed;
 	}
 	// endregion
+
+	private static class Container<T> {
+		final Object id;
+		final T value;
+
+		Container(Object id, T value) {
+			this.id = id;
+			this.value = value;
+		}
+	}
 }

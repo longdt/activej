@@ -60,7 +60,8 @@ public final class TestCrdtCluster {
 		for (int i = 0; i < 25; i++) {
 			localStorage.put((char) (i + 97) + "", TimestampContainer.now(i + 1));
 		}
-		CrdtStorageCluster<String, String, TimestampContainer<Integer>> cluster = CrdtStorageCluster.create(eventloop, clients, TimestampContainer.createCrdtFunction(Integer::max));
+		CrdtPartitions<String, TimestampContainer<Integer>> partitions = CrdtPartitions.create(eventloop, clients);
+		CrdtStorageCluster<String, TimestampContainer<Integer>> cluster = CrdtStorageCluster.create(partitions, TimestampContainer.createCrdtFunction(Integer::max));
 
 		await(StreamSupplier.ofIterator(localStorage.iterator())
 				.streamTo(StreamConsumer.ofPromise(cluster.upload()))
@@ -101,7 +102,8 @@ public final class TestCrdtCluster {
 		}
 
 		CrdtStorageMap<String, TimestampContainer<Set<Integer>>> localStorage = CrdtStorageMap.create(eventloop, union);
-		CrdtStorageCluster<String, String, TimestampContainer<Set<Integer>>> cluster = CrdtStorageCluster.create(eventloop, clients, union);
+		CrdtPartitions<String, TimestampContainer<Set<Integer>>> partitions = CrdtPartitions.create(eventloop, clients);
+		CrdtStorageCluster<String, TimestampContainer<Set<Integer>>> cluster = CrdtStorageCluster.create(partitions, union);
 
 		await(cluster.download()
 				.then(supplier -> supplier
