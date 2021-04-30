@@ -24,11 +24,20 @@ import io.activej.datastream.StreamConsumer;
 import io.activej.datastream.StreamDataAcceptor;
 import io.activej.datastream.StreamSupplier;
 import io.activej.datastream.processor.StreamSplitter;
+import io.activej.datastream.stats.StreamStats;
+import io.activej.datastream.stats.StreamStatsBasic;
+import io.activej.datastream.stats.StreamStatsDetailed;
 import io.activej.eventloop.Eventloop;
 import io.activej.eventloop.jmx.EventloopJmxBeanEx;
+import io.activej.jmx.api.attribute.JmxAttribute;
+import io.activej.jmx.api.attribute.JmxOperation;
+import io.activej.jmx.stats.EventStats;
 import io.activej.promise.Promise;
 import io.activej.promise.Promises;
+import io.activej.promise.jmx.PromiseStats;
 import org.jetbrains.annotations.NotNull;
+
+import java.time.Duration;
 
 public final class CrdtRepartitionController<K extends Comparable<K>, S> implements EventloopJmxBeanEx {
 	private final Comparable<?> localPartitionId;
@@ -51,6 +60,17 @@ public final class CrdtRepartitionController<K extends Comparable<K>, S> impleme
 		return cluster.getEventloop();
 	}
 
+	// region JMX
+	private boolean detailedStats;
+
+	private final EventStats repartitionCount = EventStats.create(Duration.ofMinutes(5));
+	private final PromiseStats repartitionPromise = PromiseStats.create(Duration.ofMinutes(5));
+	private final StreamStatsBasic<CrdtData<K, S>> repartitionStats = StreamStats.basic();
+	private final StreamStatsDetailed<CrdtData<K, S>> repartitionStatsDetailed = StreamStats.detailed();
+	private final StreamStatsBasic<K> removeStats = StreamStats.basic();
+	private final StreamStatsDetailed<K> removeStatsDetailed = StreamStats.detailed();
+	// endregion
+
 	public Promise<Void> repartition() {
 		return Promises.toTuple(cluster.upload().toTry(), localClient.remove().toTry(), localClient.download().toTry())
 				.then(all -> {
@@ -62,8 +82,10 @@ public final class CrdtRepartitionController<K extends Comparable<K>, S> impleme
 						return Promise.ofException(exception);
 					}
 
-					StreamConsumer<CrdtData<K, S>> cluster = all.getValue1().get();
-					StreamConsumer<K> remover = all.getValue2().get();
+					StreamConsumer<CrdtData<K, S>> cluster = all.getValue1().get()
+							.transformWith(detailedStats ? repartitionStats : repartitionStatsDetailed);
+					StreamConsumer<K> remover = all.getValue2().get()
+							.transformWith(detailedStats ? removeStats : removeStatsDetailed);
 					StreamSupplier<CrdtData<K, S>> downloader = all.getValue3().get();
 
 					int index = this.cluster.getPartitions().indexOf(localPartitionId);
@@ -91,4 +113,56 @@ public final class CrdtRepartitionController<K extends Comparable<K>, S> impleme
 					return downloader.streamTo(splitter.getInput());
 				});
 	}
+
+	// region JMX
+	@JmxAttribute
+	public boolean isDetailedStats() {
+		return detailedStats;
+	}
+
+	@JmxOperation
+	public void startDetailedMonitoring() {
+		detailedStats = true;
+	}
+
+	@JmxOperation
+	public void stopDetailedMonitoring() {
+		detailedStats = false;
+	}
+
+	@JmxAttribute
+	public String getLocalPartitionId() {
+		return localPartitionId.toString();
+	}
+
+	@JmxAttribute
+	public EventStats getRepartitionCount() {
+		return repartitionCount;
+	}
+
+	@JmxAttribute
+	public PromiseStats getRepartitionPromise() {
+		return repartitionPromise;
+	}
+
+	@JmxAttribute
+	public StreamStatsBasic<CrdtData<K, S>> getRepartitionStats() {
+		return repartitionStats;
+	}
+
+	@JmxAttribute
+	public StreamStatsDetailed<CrdtData<K, S>> getRepartitionStatsDetailed() {
+		return repartitionStatsDetailed;
+	}
+
+	@JmxAttribute
+	public StreamStatsBasic<K> getRemoveStats() {
+		return removeStats;
+	}
+
+	@JmxAttribute
+	public StreamStatsDetailed<K> getRemoveStatsDetailed() {
+		return removeStatsDetailed;
+	}
+	// endregion
 }
