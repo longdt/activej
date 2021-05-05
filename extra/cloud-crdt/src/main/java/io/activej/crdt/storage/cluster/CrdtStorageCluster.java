@@ -16,6 +16,7 @@
 
 package io.activej.crdt.storage.cluster;
 
+import io.activej.async.process.AsyncCloseable;
 import io.activej.async.service.EventloopService;
 import io.activej.common.api.WithInitializer;
 import io.activej.common.collection.Try;
@@ -139,13 +140,12 @@ public final class CrdtStorageCluster<K extends Comparable<K>, S> implements Crd
 		return partitions.getEventloop();
 	}
 
-	private <T> Promise<List<Container<T>>> connect(Function<CrdtStorage<K, S>, Promise<T>> method) {
+	private <T extends AsyncCloseable> Promise<List<Container<T>>> connect(Function<CrdtStorage<K, S>, Promise<T>> method) {
 		return Promises.toList(
 				partitions.getAlivePartitions().entrySet().stream()
 						.map(entry ->
 								method.apply(entry.getValue())
 										.map(t -> new Container<>(entry.getKey(), t))
-
 										.whenException(err -> partitions.markDead(entry.getKey(), err))
 										.toTry()))
 				.then(this::checkStillNotDead)
@@ -164,7 +164,10 @@ public final class CrdtStorageCluster<K extends Comparable<K>, S> implements Crd
 	@Override
 	public Promise<StreamConsumer<CrdtData<K, S>>> upload() {
 		return connect(CrdtStorage::upload)
-				.map(containers -> {
+				.then(containers -> {
+					if (containers.size() < uploadTargets) {
+						return Promise.ofException(new CrdtException("Not enough uploads"));
+					}
 					StreamSplitter<CrdtData<K, S>, CrdtData<K, S>> splitter = StreamSplitter.create(
 							(item, acceptors) -> {
 								for (int index : partitions.shard(item.getKey())) {
@@ -174,10 +177,10 @@ public final class CrdtStorageCluster<K extends Comparable<K>, S> implements Crd
 					for (Container<StreamConsumer<CrdtData<K, S>>> container : containers) {
 						splitter.newOutput().streamTo(container.value);
 					}
-					return splitter.getInput()
+					return Promise.of(splitter.getInput()
 							.transformWith(detailedStats ? uploadStats : uploadStatsDetailed)
 							.withAcknowledgement(ack -> ack
-									.thenEx(wrapException(() -> "Cluster 'upload' failed")));
+									.thenEx(wrapException(() -> "Cluster 'upload' failed"))));
 				});
 	}
 
@@ -237,11 +240,16 @@ public final class CrdtStorageCluster<K extends Comparable<K>, S> implements Crd
 		return Promise.complete();
 	}
 
-	private <T> Promise<T> checkStillNotDead(T value) {
+	private <T extends AsyncCloseable> Promise<List<Try<Container<T>>>> checkStillNotDead(List<Try<Container<T>>> value) {
 		Map<Comparable<?>, CrdtStorage<K, S>> deadPartitions = partitions.getDeadPartitions();
 		if (deadPartitions.size() > deadPartitionsThreshold) {
-			return Promise.ofException(new CrdtException("There are more dead partitions than allowed(" +
-					deadPartitions.size() + " dead, threshold is " + deadPartitionsThreshold + "), aborting"));
+			CrdtException exception = new CrdtException("There are more dead partitions than allowed(" +
+					deadPartitions.size() + " dead, threshold is " + deadPartitionsThreshold + "), aborting");
+			value.stream()
+					.filter(Try::isSuccess)
+					.map(Try::get)
+					.forEach(container -> container.value.closeEx(exception));
+			return Promise.ofException(exception);
 		}
 		return Promise.of(value);
 	}
@@ -318,7 +326,7 @@ public final class CrdtStorageCluster<K extends Comparable<K>, S> implements Crd
 	}
 	// endregion
 
-	private static class Container<T> {
+	private static class Container<T extends AsyncCloseable> {
 		final Object id;
 		final T value;
 

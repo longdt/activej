@@ -39,6 +39,8 @@ public final class TestCrdtCluster {
 
 	@ClassRule
 	public static final ByteBufRule byteBufRule = new ByteBufRule();
+	public static final int REPLICATION_COUNT = 4;
+	public static final int CLIENT_SERVER_PAIRS = 10;
 
 	@Test
 	public void testUpload() throws IOException {
@@ -49,7 +51,7 @@ public final class TestCrdtCluster {
 		List<CrdtServer<String, TimestampContainer<Integer>>> servers = new ArrayList<>();
 		Map<String, CrdtStorage<String, TimestampContainer<Integer>>> clients = new HashMap<>();
 		Map<String, CrdtStorageMap<String, TimestampContainer<Integer>>> remoteStorages = new LinkedHashMap<>();
-		for (int i = 0; i < 10; i++) {
+		for (int i = 0; i < CLIENT_SERVER_PAIRS; i++) {
 			CrdtStorageMap<String, TimestampContainer<Integer>> storage = CrdtStorageMap.create(eventloop, TimestampContainer.createCrdtFunction(Integer::max));
 			InetSocketAddress address = new InetSocketAddress(getFreePort());
 			CrdtServer<String, TimestampContainer<Integer>> server = CrdtServer.create(eventloop, storage, serializer);
@@ -58,6 +60,9 @@ public final class TestCrdtCluster {
 			clients.put("server_" + i, CrdtStorageClient.create(eventloop, address, serializer));
 			remoteStorages.put("server_" + i, storage);
 		}
+		clients.put("dead_one", CrdtStorageClient.create(eventloop, new InetSocketAddress(5555), serializer));
+		clients.put("dead_two", CrdtStorageClient.create(eventloop, new InetSocketAddress(5556), serializer));
+		clients.put("dead_three", CrdtStorageClient.create(eventloop, new InetSocketAddress(5557), serializer));
 
 		List<CrdtData<String, TimestampContainer<Integer>>> data = new ArrayList<>();
 		for (int i = 0; i < 25; i++) {
@@ -68,9 +73,8 @@ public final class TestCrdtCluster {
 			localStorage.put(datum);
 		}
 		CrdtPartitions<String, TimestampContainer<Integer>> partitions = CrdtPartitions.create(eventloop, clients);
-		int replicationCount = 4;
 		CrdtStorageCluster<String, TimestampContainer<Integer>> cluster = CrdtStorageCluster.create(partitions, TimestampContainer.createCrdtFunction(Integer::max))
-				.withReplicationCount(replicationCount);
+				.withReplicationCount(REPLICATION_COUNT);
 
 		await(StreamSupplier.ofIterator(localStorage.iterator())
 				.streamTo(StreamConsumer.ofPromise(cluster.upload()))
@@ -83,7 +87,7 @@ public final class TestCrdtCluster {
 
 		assertEquals(new HashSet<>(data), result.keySet());
 		for (Integer count : result.values()) {
-			assertEquals(replicationCount, count.intValue());
+			assertEquals(REPLICATION_COUNT, count.intValue());
 		}
 	}
 
@@ -94,7 +98,6 @@ public final class TestCrdtCluster {
 
 		List<CrdtServer<String, TimestampContainer<Set<Integer>>>> servers = new ArrayList<>();
 		Map<String, CrdtStorage<String, TimestampContainer<Set<Integer>>>> clients = new HashMap<>();
-		Map<String, CrdtStorageMap<String, TimestampContainer<Set<Integer>>>> remoteStorages = new LinkedHashMap<>();
 
 		CrdtFunction<TimestampContainer<Set<Integer>>> union = TimestampContainer.createCrdtFunction((a, b) -> {
 			a.addAll(b);
@@ -105,7 +108,7 @@ public final class TestCrdtCluster {
 		String key1 = "test_1";
 		String key2 = "test_2";
 		String key3 = "test_3";
-		for (int i = 0; i < 10; i++) {
+		for (int i = 0; i < CLIENT_SERVER_PAIRS; i++) {
 			CrdtStorageMap<String, TimestampContainer<Set<Integer>>> storage = CrdtStorageMap.create(eventloop, union);
 
 			storage.put(key1, TimestampContainer.now(new HashSet<>(singleton(i))));
@@ -117,20 +120,21 @@ public final class TestCrdtCluster {
 			server.withListenAddresses(address).listen();
 			servers.add(server);
 			clients.put("server_" + i, CrdtStorageClient.create(eventloop, address, serializer));
-			remoteStorages.put("server_" + i, storage);
 		}
+
+		clients.put("dead_one", CrdtStorageClient.create(eventloop, new InetSocketAddress(5555), serializer));
+		clients.put("dead_two", CrdtStorageClient.create(eventloop, new InetSocketAddress(5556), serializer));
+		clients.put("dead_three", CrdtStorageClient.create(eventloop, new InetSocketAddress(5557), serializer));
 
 		CrdtStorageMap<String, TimestampContainer<Set<Integer>>> localStorage = CrdtStorageMap.create(eventloop, union);
 		CrdtPartitions<String, TimestampContainer<Set<Integer>>> partitions = CrdtPartitions.create(eventloop, clients);
-		CrdtStorageCluster<String, TimestampContainer<Set<Integer>>> cluster = CrdtStorageCluster.create(partitions, union);
+		CrdtStorageCluster<String, TimestampContainer<Set<Integer>>> cluster = CrdtStorageCluster.create(partitions, union)
+				.withReplicationCount(REPLICATION_COUNT);
 
 		await(cluster.download()
 				.then(supplier -> supplier
-						.streamTo(StreamConsumer.of(localStorage::put))
-						.whenComplete(() -> {
-							System.out.println("!finish");
-							servers.forEach(AbstractServer::close);
-						})));
+						.streamTo(StreamConsumer.of(localStorage::put)))
+				.whenComplete(() -> servers.forEach(AbstractServer::close)));
 
 		assertEquals(set(0, 1, 2, 3, 4, 5, 6, 7, 8, 9), localStorage.get(key1).getState());
 		assertEquals(set(0, 1, 2, 3, 4), localStorage.get(key2).getState());
