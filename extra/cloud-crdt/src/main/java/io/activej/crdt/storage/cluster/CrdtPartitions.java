@@ -21,7 +21,6 @@ import io.activej.async.function.AsyncSuppliers;
 import io.activej.async.service.EventloopService;
 import io.activej.common.api.WithInitializer;
 import io.activej.common.exception.MalformedDataException;
-import io.activej.crdt.CrdtException;
 import io.activej.crdt.CrdtStorageClient;
 import io.activej.crdt.storage.CrdtStorage;
 import io.activej.crdt.util.CrdtDataSerializer;
@@ -37,7 +36,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
-import java.util.function.BiFunction;
 import java.util.function.Function;
 
 import static io.activej.async.util.LogUtils.toLogger;
@@ -62,7 +60,8 @@ public final class CrdtPartitions<K extends Comparable<K>, S> implements Eventlo
 	private final Map<Comparable<?>, CrdtStorage<K, S>> partitionsView = Collections.unmodifiableMap(partitions);
 
 	private final Eventloop eventloop;
-	private final RendezvousHashSharder sharder;
+
+	private RendezvousHashSharder sharder;
 
 	private CrdtDataSerializer<K, S> serializer;
 	private int topShards = 1;
@@ -95,7 +94,11 @@ public final class CrdtPartitions<K extends Comparable<K>, S> implements Eventlo
 
 	public void setTopShards(int topShards) {
 		this.topShards = topShards;
-		sharder.recompute(this.alivePartitions.keySet(), topShards);
+		sharder = RendezvousHashSharder.create(this.alivePartitions.keySet(), topShards);
+	}
+
+	public RendezvousHashSharder getSharder() {
+		return sharder;
 	}
 
 	/**
@@ -167,7 +170,7 @@ public final class CrdtPartitions<K extends Comparable<K>, S> implements Eventlo
 		if (partition != null) {
 			logger.warn("marking {} as dead ", partitionId, e);
 			deadPartitions.put(partitionId, partition);
-			sharder.recompute(alivePartitions.keySet(), topShards);
+			recompute();
 			return true;
 		}
 		return false;
@@ -178,32 +181,8 @@ public final class CrdtPartitions<K extends Comparable<K>, S> implements Eventlo
 		if (partition != null) {
 			logger.info("Partition {} is alive again!", partitionId);
 			alivePartitions.put(partitionId, partition);
-			sharder.recompute(alivePartitions.keySet(), topShards);
+			recompute();
 		}
-	}
-
-	/**
-	 * If partition has returned exception other than {@link CrdtException} that indicates that there were connection problems
-	 * or that there were no response at all
-	 */
-	public void markIfDead(Comparable<?> partitionId, Throwable e) {
-		if (!(e instanceof CrdtException)) {
-			markDead(partitionId, e);
-		}
-	}
-
-	public <T> BiFunction<T, Throwable, Promise<T>> wrapDeath(Comparable<?> partitionId) {
-		return (res, e) -> {
-			if (e == null) {
-				return Promise.of(res);
-			}
-			markIfDead(partitionId, e);
-			if (e instanceof CrdtException) {
-				return Promise.ofException(e);
-			}
-			logger.warn("Node failed", e);
-			return Promise.ofException(new CrdtException("Node failed"));
-		};
 	}
 
 	public int[] shard(Object key) {
@@ -216,12 +195,16 @@ public final class CrdtPartitions<K extends Comparable<K>, S> implements Eventlo
 		}
 		int index = 0;
 		for (Comparable<?> key : alivePartitions.keySet()) {
-			if (key.equals(partitionId)){
+			if (key.equals(partitionId)) {
 				return index;
 			}
 			index++;
 		}
 		throw new AssertionError();
+	}
+
+	private void recompute() {
+		sharder = RendezvousHashSharder.create(alivePartitions.keySet(), topShards);
 	}
 
 	@NotNull

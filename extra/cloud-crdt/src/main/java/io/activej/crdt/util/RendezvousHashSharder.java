@@ -19,6 +19,7 @@ package io.activej.crdt.util;
 import io.activej.common.ApplicationSettings;
 import io.activej.common.HashUtils;
 import io.activej.common.ref.RefInt;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.Comparator;
 import java.util.List;
@@ -34,51 +35,73 @@ public final class RendezvousHashSharder {
 		checkArgument((NUMBER_OF_BUCKETS & (NUMBER_OF_BUCKETS - 1)) == 0, "Number of buckets must be a power of two");
 	}
 
-	private int[][] buckets;
+	private final List<ObjWithIndex> totalPartitions;
+	private final int[][] buckets;
+	private final int topShards;
 
-	private RendezvousHashSharder() {
+	private int @Nullable [] predefined;
+
+	private RendezvousHashSharder(List<ObjWithIndex> totalPartitions, int topShards) {
+		this.totalPartitions = totalPartitions;
+		this.topShards = topShards;
+		this.buckets = new int[NUMBER_OF_BUCKETS][topShards];
 	}
 
 	public static RendezvousHashSharder create(Set<? extends Comparable<?>> partitionIds, int topShards) {
-		RendezvousHashSharder sharder = new RendezvousHashSharder();
-		sharder.recompute(partitionIds, topShards);
+		RefInt indexRef = new RefInt(0);
+		List<ObjWithIndex> totalPartitions = partitionIds.stream()
+				.sorted()
+				.map(partitionId -> new ObjWithIndex(partitionId, indexRef.value++))
+				.collect(toList());
+
+		RendezvousHashSharder sharder = new RendezvousHashSharder(totalPartitions, topShards);
+		sharder.recompute();
 		return sharder;
 	}
 
-	public void recompute(Set<? extends Comparable<?>> partitionIds, int topShards) {
-		checkArgument(topShards > 0, "Top number of partitions must be positive");
-		checkArgument(topShards <= partitionIds.size(), "Top number of partitions must be less than or equal to number of partitions");
-
-		buckets = new int[NUMBER_OF_BUCKETS][topShards];
-
-		class ObjWithIndex<O> {
-			final O object;
-			final int index;
-
-			ObjWithIndex(O object, int index) {
-				this.object = object;
-				this.index = index;
-			}
+	public void recompute(Set<? extends Comparable<?>> partitionIds) {
+		if (!totalPartitions.removeIf(el -> !partitionIds.contains(el.object))) {
+			return;
 		}
-		RefInt indexRef = new RefInt(0);
-		List<ObjWithIndex<Object>> indexed = partitionIds.stream()
-				.sorted()
-				.map(partitionId -> new ObjWithIndex<>((Object) partitionId, indexRef.value++))
-				.collect(toList());
+		recompute();
+	}
 
+	private void recompute() {
+		if (totalPartitions.size() <= topShards) {
+			predefined = new int[totalPartitions.size()];
+			for (int i = 0; i < totalPartitions.size(); i++) {
+				predefined[i] = totalPartitions.get(i).index;
+			}
+		} else {
+			refillBuckets();
+		}
+	}
+
+	private void refillBuckets() {
 		for (int n = 0; n < buckets.length; n++) {
 			int finalN = n;
-			List<ObjWithIndex<Object>> copy = indexed.stream()
-					.sorted(Comparator.<ObjWithIndex<Object>>comparingInt(x -> HashUtils.murmur3hash(x.object.hashCode(), finalN)).reversed())
-					.collect(toList());
 
-			for (int i = 0; i < topShards; i++) {
-				buckets[n][i] = copy.get(i).index;
-			}
+			buckets[n] = totalPartitions.stream()
+					.sorted(Comparator.<ObjWithIndex>comparingInt(x -> HashUtils.murmur3hash(x.object.hashCode(), finalN)).reversed())
+					.mapToInt(value -> value.index)
+					.limit(topShards)
+					.toArray();
 		}
 	}
 
 	public int[] shard(Object key) {
+		if (predefined != null) return predefined;
+
 		return buckets[key.hashCode() & (NUMBER_OF_BUCKETS - 1)];
+	}
+
+	private static final class ObjWithIndex {
+		final Comparable<?> object;
+		final int index;
+
+		ObjWithIndex(Comparable<?> object, int index) {
+			this.object = object;
+			this.index = index;
+		}
 	}
 }

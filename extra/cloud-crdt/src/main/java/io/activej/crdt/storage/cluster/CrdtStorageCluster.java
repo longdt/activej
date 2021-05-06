@@ -130,6 +130,7 @@ public final class CrdtStorageCluster<K extends Comparable<K>, S> implements Crd
 				"Number of upload targets should not exceed total number of partitions");
 		this.deadPartitionsThreshold = deadPartitionsThreshold;
 		this.uploadTargets = uploadTargets;
+		this.partitions.setTopShards(uploadTargets);
 		return this;
 	}
 	// endregion
