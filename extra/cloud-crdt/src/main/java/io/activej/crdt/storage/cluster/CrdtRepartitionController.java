@@ -16,6 +16,8 @@
 
 package io.activej.crdt.storage.cluster;
 
+import io.activej.async.function.AsyncSupplier;
+import io.activej.async.function.AsyncSuppliers;
 import io.activej.async.process.AsyncCloseable;
 import io.activej.crdt.CrdtData;
 import io.activej.crdt.CrdtException;
@@ -43,6 +45,8 @@ public final class CrdtRepartitionController<K extends Comparable<K>, S> impleme
 	private final Comparable<?> localPartitionId;
 	private final CrdtStorage<K, S> localClient;
 	private final CrdtStorageCluster<K, S> cluster;
+
+	private final AsyncSupplier<Void> repartition = AsyncSuppliers.reuse(this::doRepartition);
 
 	public CrdtRepartitionController(Comparable<?> localPartitionId, CrdtStorage<K, S> localClient, CrdtStorageCluster<K, S> cluster) {
 		this.localClient = localClient;
@@ -72,6 +76,11 @@ public final class CrdtRepartitionController<K extends Comparable<K>, S> impleme
 	// endregion
 
 	public Promise<Void> repartition() {
+		return repartition.get();
+	}
+
+	@NotNull
+	private Promise<Void> doRepartition() {
 		return Promises.toTuple(cluster.upload().toTry(), localClient.remove().toTry(), localClient.download().toTry())
 				.then(all -> {
 					if (!all.getValue1().isSuccess() || !all.getValue2().isSuccess() || !all.getValue3().isSuccess()) {
