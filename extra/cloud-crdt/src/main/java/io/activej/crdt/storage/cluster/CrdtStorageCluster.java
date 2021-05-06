@@ -26,6 +26,7 @@ import io.activej.crdt.function.CrdtFilter;
 import io.activej.crdt.function.CrdtFunction;
 import io.activej.crdt.primitives.CrdtType;
 import io.activej.crdt.storage.CrdtStorage;
+import io.activej.crdt.util.RendezvousHashSharder;
 import io.activej.datastream.StreamConsumer;
 import io.activej.datastream.StreamDataAcceptor;
 import io.activej.datastream.StreamSupplier;
@@ -42,8 +43,6 @@ import io.activej.jmx.api.attribute.JmxOperation;
 import io.activej.promise.Promise;
 import io.activej.promise.Promises;
 import org.jetbrains.annotations.NotNull;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
@@ -55,8 +54,6 @@ import static java.util.stream.Collectors.toList;
 
 @SuppressWarnings("rawtypes") // JMX
 public final class CrdtStorageCluster<K extends Comparable<K>, S> implements CrdtStorage<K, S>, WithInitializer<CrdtStorageCluster<K, S>>, EventloopService, EventloopJmxBeanEx {
-	private static final Logger logger = LoggerFactory.getLogger(CrdtStorageCluster.class);
-
 	private final CrdtPartitions<K, S> partitions;
 
 	private final CrdtFunction<S> function;
@@ -166,21 +163,27 @@ public final class CrdtStorageCluster<K extends Comparable<K>, S> implements Crd
 	public Promise<StreamConsumer<CrdtData<K, S>>> upload() {
 		return connect(CrdtStorage::upload)
 				.then(containers -> {
-					if (containers.size() < uploadTargets) {
-						return Promise.ofException(new CrdtException("Not enough uploads"));
-					}
-					StreamSplitter<CrdtData<K, S>, CrdtData<K, S>> splitter = StreamSplitter.create(
-							(item, acceptors) -> {
-								for (int index : partitions.shard(item.getKey())) {
-									acceptors[index].accept(item);
-								}
-							});
+					// TODO: check if partitions has been changed
+					RendezvousHashSharder sharder = partitions.getSharder();
+					TolerantStreamSplitter<K, S> splitter = new TolerantStreamSplitter<>(sharder);
+					getEventloop().post(splitter::start);
 					for (Container<StreamConsumer<CrdtData<K, S>>> container : containers) {
-						splitter.newOutput().streamTo(container.value);
+						splitter.newOutput().streamTo(container.value
+								.withAcknowledgement(ack -> ack
+										.whenException(e -> {
+											partitions.markDead(container.id, e);
+											sharder.recompute(partitions.getAlivePartitions().keySet());
+										})));
 					}
 					return Promise.of(splitter.getInput()
 							.transformWith(detailedStats ? uploadStats : uploadStatsDetailed)
 							.withAcknowledgement(ack -> ack
+									.then(() -> {
+										if (containers.size() - splitter.getFailed() < uploadTargets) {
+											return Promise.ofException(new CrdtException("Failed to upload data to the required number of partitions"));
+										}
+										return Promise.complete();
+									})
 									.thenEx(wrapException(() -> "Cluster 'upload' failed"))));
 				});
 	}
@@ -328,10 +331,10 @@ public final class CrdtStorageCluster<K extends Comparable<K>, S> implements Crd
 	// endregion
 
 	private static class Container<T extends AsyncCloseable> {
-		final Object id;
+		final Comparable<?> id;
 		final T value;
 
-		Container(Object id, T value) {
+		Container(Comparable<?> id, T value) {
 			this.id = id;
 			this.value = value;
 		}
