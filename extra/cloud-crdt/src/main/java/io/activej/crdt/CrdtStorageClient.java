@@ -141,7 +141,13 @@ public final class CrdtStorageClient<K extends Comparable<K>, S> implements Crdt
 										.withEndOfStream(eos -> eos
 												.then(messaging::sendEndOfStream)
 												.thenEx(wrapException(() -> "Download failed"))
-												.whenResult(messaging::close))));
+												.whenComplete(($2, e) -> {
+													if (e == null) {
+														messaging.close();
+													} else {
+														messaging.closeEx(e);
+													}
+												}))));
 	}
 
 	@Override
