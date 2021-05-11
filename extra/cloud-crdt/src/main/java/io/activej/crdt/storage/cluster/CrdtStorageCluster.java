@@ -20,6 +20,7 @@ import io.activej.async.process.AsyncCloseable;
 import io.activej.async.service.EventloopService;
 import io.activej.common.api.WithInitializer;
 import io.activej.common.collection.Try;
+import io.activej.common.ref.RefInt;
 import io.activej.crdt.CrdtData;
 import io.activej.crdt.CrdtException;
 import io.activej.crdt.function.CrdtFilter;
@@ -32,6 +33,7 @@ import io.activej.datastream.StreamDataAcceptor;
 import io.activej.datastream.StreamSupplier;
 import io.activej.datastream.processor.StreamReducer;
 import io.activej.datastream.processor.StreamReducers.BinaryAccumulatorReducer;
+import io.activej.datastream.processor.StreamReducers.Reducer;
 import io.activej.datastream.processor.StreamSplitter;
 import io.activej.datastream.stats.StreamStats;
 import io.activej.datastream.stats.StreamStatsBasic;
@@ -67,7 +69,7 @@ public final class CrdtStorageCluster<K extends Comparable<K>, S> implements Crd
 	/**
 	 * Number of uploads that are initiated.
 	 */
-	private int uploadTargets = 1;
+	private int replicationCount = 1;
 
 	private CrdtFilter<S> filter;
 
@@ -104,7 +106,7 @@ public final class CrdtStorageCluster<K extends Comparable<K>, S> implements Crd
 		checkArgument(1 <= replicationCount && replicationCount <= partitions.getPartitions().size(),
 				"Replication count cannot be less than one or greater than number of partitions");
 		this.deadPartitionsThreshold = replicationCount - 1;
-		this.uploadTargets = replicationCount;
+		this.replicationCount = replicationCount;
 		this.partitions.setTopShards(replicationCount);
 		return this;
 	}
@@ -126,7 +128,7 @@ public final class CrdtStorageCluster<K extends Comparable<K>, S> implements Crd
 		checkArgument(uploadTargets <= partitions.getPartitions().size(),
 				"Number of upload targets should not exceed total number of partitions");
 		this.deadPartitionsThreshold = deadPartitionsThreshold;
-		this.uploadTargets = uploadTargets;
+		this.replicationCount = uploadTargets;
 		this.partitions.setTopShards(uploadTargets);
 		return this;
 	}
@@ -179,7 +181,7 @@ public final class CrdtStorageCluster<K extends Comparable<K>, S> implements Crd
 							.transformWith(detailedStats ? uploadStats : uploadStatsDetailed)
 							.withAcknowledgement(ack -> ack
 									.then(() -> {
-										if (containers.size() - splitter.getFailed() < uploadTargets) {
+										if (containers.size() - splitter.getFailed() < replicationCount) {
 											return Promise.ofException(new CrdtException("Failed to upload data to the required number of partitions"));
 										}
 										return Promise.complete();
@@ -193,19 +195,60 @@ public final class CrdtStorageCluster<K extends Comparable<K>, S> implements Crd
 		return connect(storage -> storage.download(timestamp))
 				.map(containers -> {
 					StreamReducer<K, CrdtData<K, S>, CrdtData<K, S>> streamReducer = StreamReducer.create();
+					RefInt failed = new RefInt(0);
 					for (Container<StreamSupplier<CrdtData<K, S>>> container : containers) {
-						container.value.streamTo(streamReducer.newInput(CrdtData::getKey, filter == null ?
+						Reducer<K, CrdtData<K, S>, CrdtData<K, S>, CrdtData<K, S>> reducer = filter == null ?
 								new BinaryAccumulatorReducer<>((a, b) -> new CrdtData<>(a.getKey(), function.merge(a.getState(), b.getState()))) :
 								new BinaryAccumulatorReducer<K, CrdtData<K, S>>((a, b) -> new CrdtData<>(a.getKey(), function.merge(a.getState(), b.getState()))) {
 									@Override
 									protected boolean filter(CrdtData<K, S> value) {
 										return filter.test(value.getState());
 									}
+								};
+
+						container.value.streamTo(streamReducer.addInput(
+								streamReducer.new SimpleInput<CrdtData<K, S>>(CrdtData::getKey, reducer) {
+									boolean awaiting;
+
+									@Override
+									protected void onError(Throwable e) {
+										if (awaiting) {
+											advance();
+										}
+										closeInput();
+										partitions.markDead(container.id, e);
+										if (++failed.value == containers.size()) {
+											super.onError(e);
+										} else {
+											continueReduce();
+										}
+									}
+
+									@Override
+									protected int await() {
+										assert !awaiting;
+										awaiting = true;
+										return super.await();
+									}
+
+									@Override
+									protected int advance() {
+										assert awaiting;
+										awaiting = false;
+										return super.advance();
+									}
 								}));
 					}
 					return streamReducer.getOutput()
 							.transformWith(detailedStats ? downloadStats : downloadStatsDetailed)
 							.withEndOfStream(eos -> eos
+									.then(() -> {
+										int deadBeforeDownload = partitions.getPartitions().size() - containers.size();
+										if (deadBeforeDownload + failed.get() >= replicationCount) {
+											return Promise.ofException(new CrdtException("Failed to download from the required number of partitions"));
+										}
+										return Promise.complete();
+									})
 									.thenEx(wrapException(() -> "Cluster 'download' failed")));
 				});
 	}
@@ -265,8 +308,8 @@ public final class CrdtStorageCluster<K extends Comparable<K>, S> implements Crd
 	}
 
 	@JmxAttribute
-	public int getUploadTargets() {
-		return uploadTargets;
+	public int getReplicationCount() {
+		return replicationCount;
 	}
 
 	@JmxOperation
