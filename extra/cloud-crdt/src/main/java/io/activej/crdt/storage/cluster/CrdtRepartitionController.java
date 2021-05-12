@@ -22,6 +22,7 @@ import io.activej.async.process.AsyncCloseable;
 import io.activej.crdt.CrdtData;
 import io.activej.crdt.CrdtException;
 import io.activej.crdt.storage.CrdtStorage;
+import io.activej.crdt.util.RendezvousHashSharder;
 import io.activej.datastream.StreamConsumer;
 import io.activej.datastream.StreamDataAcceptor;
 import io.activej.datastream.StreamSupplier;
@@ -97,20 +98,18 @@ public final class CrdtRepartitionController<K extends Comparable<K>, S> impleme
 							.transformWith(detailedStats ? removeStats : removeStatsDetailed);
 					StreamSupplier<CrdtData<K, S>> downloader = all.getValue3().get();
 
-					int index = this.cluster.getPartitions().indexOf(localPartitionId);
-					assert index >= 0;
+					RendezvousHashSharder sharder = this.cluster.getPartitions().getSharder();
+					int localPartitionIndex = sharder.indexOf(localPartitionId);
 
 					StreamSplitter<CrdtData<K, S>, ?> splitter = StreamSplitter.create(
 							(data, acceptors) -> {
 								StreamDataAcceptor<Object> clusterAcceptor = acceptors[0];
 								StreamDataAcceptor<Object> removeAcceptor = acceptors[1];
 								clusterAcceptor.accept(data);
-								int[] selected = this.cluster.getPartitions().shard(data.getKey());
-								for (int s : selected) {
-									if (s == index) {
-										return;
-									}
-								}
+
+								int[] selected = sharder.shard(data.getKey());
+								if (arrayContains(selected, localPartitionIndex)) return;
+
 								removeAcceptor.accept(data.getKey());
 							});
 
@@ -121,6 +120,15 @@ public final class CrdtRepartitionController<K extends Comparable<K>, S> impleme
 
 					return downloader.streamTo(splitter.getInput());
 				});
+	}
+
+	private static boolean arrayContains(int[] selected, int index) {
+		for (int s : selected) {
+			if (s == index) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	// region JMX

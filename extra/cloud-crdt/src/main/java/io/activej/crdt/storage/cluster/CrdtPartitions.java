@@ -189,20 +189,6 @@ public final class CrdtPartitions<K extends Comparable<K>, S> implements Eventlo
 		return sharder.shard(key);
 	}
 
-	public int indexOf(Comparable<?> partitionId) {
-		if (!alivePartitions.containsKey(partitionId)) {
-			return -1;
-		}
-		int index = 0;
-		for (Comparable<?> key : alivePartitions.keySet()) {
-			if (key.equals(partitionId)) {
-				return index;
-			}
-			index++;
-		}
-		throw new AssertionError();
-	}
-
 	private void recompute() {
 		sharder = RendezvousHashSharder.create(alivePartitions.keySet(), topShards);
 	}
@@ -227,7 +213,7 @@ public final class CrdtPartitions<K extends Comparable<K>, S> implements Eventlo
 
 	@Override
 	public String toString() {
-		return "FsPartitions{partitions=" + partitions + ", deadPartitions=" + deadPartitions + '}';
+		return "CrdtPartitions{partitions=" + partitions + ", deadPartitions=" + deadPartitions + '}';
 	}
 
 	private Promise<Void> doCheckAllPartitions() {

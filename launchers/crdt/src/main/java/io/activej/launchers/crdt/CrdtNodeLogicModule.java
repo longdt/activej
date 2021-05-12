@@ -63,7 +63,6 @@ public abstract class CrdtNodeLogicModule<K extends Comparable<K>, S> extends Ab
 		bind((Key<?>) Key.ofType(supertype, Persistent.class))
 				.to(Key.ofType(RecursiveType.of(CrdtStorageFs.class, typeArgs).getType()));
 
-		typeArgs.add(0, RecursiveType.of(String.class));
 		bind((Key<?>) Key.ofType(supertype, Cluster.class))
 				.to(Key.ofType(RecursiveType.of(CrdtStorageCluster.class, typeArgs).getType()));
 	}

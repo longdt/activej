@@ -23,6 +23,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.Comparator;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.Set;
 
 import static io.activej.common.Checks.checkArgument;
@@ -93,6 +94,15 @@ public final class RendezvousHashSharder {
 		if (predefined != null) return predefined;
 
 		return buckets[key.hashCode() & (NUMBER_OF_BUCKETS - 1)];
+	}
+
+	public int indexOf(Comparable<?> partition){
+		for (ObjWithIndex objWithIndex : totalPartitions) {
+			if (objWithIndex.object.equals(partition)){
+				return objWithIndex.index;
+			}
+		}
+		throw new NoSuchElementException("Cannot find partition: " + partition);
 	}
 
 	private static final class ObjWithIndex {
