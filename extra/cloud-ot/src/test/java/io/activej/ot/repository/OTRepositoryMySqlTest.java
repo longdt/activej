@@ -25,9 +25,9 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Executors;
 
-import static io.activej.codec.json.JsonUtils.fromJson;
-import static io.activej.codec.json.JsonUtils.toJson;
 import static io.activej.common.collection.CollectionUtils.first;
+import static io.activej.json.JsonUtils.fromJson;
+import static io.activej.json.JsonUtils.toJson;
 import static io.activej.ot.OTAlgorithms.*;
 import static io.activej.ot.OTCommit.ofCommit;
 import static io.activej.ot.OTCommit.ofRoot;
@@ -58,7 +58,7 @@ public class OTRepositoryMySqlTest {
 	public void before() throws IOException, SQLException {
 		idGenerator = new IdGeneratorStub();
 		repository = OTRepositoryMySql.create(Eventloop.getCurrentEventloop(), Executors.newFixedThreadPool(4), dataSource("test.properties"), idGenerator,
-				createTestOp(), OP_CODEC);
+				createTestOp(), TestOp.class);
 		repository.initialize();
 		repository.truncateTables();
 	}
@@ -78,17 +78,16 @@ public class OTRepositoryMySqlTest {
 	public void testJson() throws MalformedDataException {
 		{
 			TestAdd testAdd = new TestAdd(1);
-			String json = toJson(OP_CODEC, testAdd);
-			TestAdd testAdd2 = (TestAdd) fromJson(OP_CODEC, json);
-			assertEquals(testAdd.getDelta(), testAdd2.getDelta());
+			String json = toJson(TestOp.class, testAdd);
+			TestOp testAdd2 = fromJson(TestOp.class, json);
+			assertEquals(testAdd, testAdd2);
 		}
 
 		{
 			TestSet testSet = new TestSet(0, 4);
-			String json = toJson(OP_CODEC, testSet);
-			TestSet testSet2 = (TestSet) fromJson(OP_CODEC, json);
-			assertEquals(testSet.getPrev(), testSet2.getPrev());
-			assertEquals(testSet.getNext(), testSet2.getNext());
+			String json = toJson(TestOp.class, testSet);
+			TestOp testSet2 = fromJson(TestOp.class, json);
+			assertEquals(testSet, testSet2);
 		}
 	}
 
