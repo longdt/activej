@@ -30,7 +30,8 @@ import io.activej.serializer.BinarySerializer;
 import java.net.InetAddress;
 
 import static io.activej.crdt.CrdtMessaging.*;
-import static io.activej.crdt.util.Utils.nullTerminatedJson;
+import static io.activej.crdt.CrdtMessaging.CrdtResponses.DOWNLOAD_STARTED;
+import static io.activej.json.CspJsonUtils.nullTerminatedJson;
 
 public final class CrdtServer<K extends Comparable<K>, S> extends AbstractServer<CrdtServer<K, S>> {
 	private final CrdtStorage<K, S> storage;
@@ -56,7 +57,7 @@ public final class CrdtServer<K extends Comparable<K>, S> extends AbstractServer
 	@Override
 	protected void serve(AsyncTcpSocket socket, InetAddress remoteAddress) {
 		MessagingWithBinaryStreaming<CrdtMessage, CrdtResponse> messaging =
-				MessagingWithBinaryStreaming.create(socket, nullTerminatedJson(MESSAGE_CODEC, RESPONSE_CODEC));
+				MessagingWithBinaryStreaming.create(socket, nullTerminatedJson(CrdtMessage.class, CrdtResponse.class));
 		messaging.receive()
 				.then(msg -> {
 					if (msg == CrdtMessages.UPLOAD) {
@@ -78,7 +79,7 @@ public final class CrdtServer<K extends Comparable<K>, S> extends AbstractServer
 					}
 					if (msg instanceof Download) {
 						return storage.download(((Download) msg).getToken())
-								.whenResult(() -> messaging.send(new DownloadStarted()))
+								.whenResult(() -> messaging.send(DOWNLOAD_STARTED))
 								.then(supplier -> supplier
 										.transformWith(ChannelSerializer.create(serializer))
 										.streamTo(messaging.sendBinaryStream()));

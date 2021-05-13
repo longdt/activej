@@ -16,36 +16,14 @@
 
 package io.activej.crdt.util;
 
-import io.activej.bytebuf.ByteBuf;
-import io.activej.bytebuf.ByteBufPool;
-import io.activej.codec.StructuredCodec;
-import io.activej.codec.json.JsonUtils;
 import io.activej.crdt.CrdtException;
-import io.activej.csp.binary.ByteBufsCodec;
-import io.activej.csp.binary.ByteBufsDecoder;
 import io.activej.promise.Promise;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
-
-public class Utils {
-
-	public static <I, O> ByteBufsCodec<I, O> nullTerminatedJson(StructuredCodec<I> in, StructuredCodec<O> out) {
-		return ByteBufsCodec
-				.ofDelimiter(
-						ByteBufsDecoder.ofNullTerminatedBytes(),
-						buf -> {
-							ByteBuf buf1 = ByteBufPool.ensureWriteRemaining(buf, 1);
-							buf1.put((byte) 0);
-							return buf1;
-						})
-				.andThen(
-						buf -> JsonUtils.fromJson(in, buf.asString(UTF_8)),
-						item -> JsonUtils.toJsonBuf(out, item));
-	}
+public final class Utils {
 
 	public static <T> BiFunction<T, @Nullable Throwable, Promise<? extends T>> wrapException(Supplier<String> errorMessageSupplier) {
 		return (v, e) -> e == null ?

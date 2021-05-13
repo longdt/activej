@@ -17,9 +17,8 @@
 package io.activej.launchers.crdt;
 
 import io.activej.bytebuf.ByteBuf;
-import io.activej.codec.StructuredCodec;
-import io.activej.codec.json.JsonUtils;
 import io.activej.common.exception.MalformedDataException;
+import io.activej.common.reflection.TypeT;
 import io.activej.config.Config;
 import io.activej.crdt.CrdtData;
 import io.activej.crdt.storage.local.CrdtStorageMap;
@@ -29,17 +28,18 @@ import io.activej.http.loader.StaticLoader;
 import io.activej.inject.annotation.Optional;
 import io.activej.inject.annotation.Provides;
 import io.activej.inject.module.AbstractModule;
+import io.activej.json.JsonUtils;
 import io.activej.promise.Promise;
 
 import java.util.concurrent.Executor;
 
-import static io.activej.codec.StructuredCodecs.tuple;
 import static io.activej.http.AsyncServletDecorator.loadBody;
 import static io.activej.http.HttpMethod.*;
 import static io.activej.launchers.initializers.Initializers.ofHttpServer;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 public abstract class CrdtHttpModule<K extends Comparable<K>, S> extends AbstractModule {
+	private final TypeT<CrdtData<K, S>> crdtDataManifest = new TypeT<CrdtData<K, S>>() {};
 
 	@Provides
 	AsyncHttpServer server(Eventloop eventloop, AsyncServlet servlet, Config config) {
@@ -58,22 +58,16 @@ public abstract class CrdtHttpModule<K extends Comparable<K>, S> extends Abstrac
 			CrdtStorageMap<K, S> client,
 			@Optional BackupService<K, S> backupService
 	) {
-		StructuredCodec<K> keyCodec = descriptor.getKeyCodec();
-		StructuredCodec<S> stateCodec = descriptor.getStateCodec();
-
-		StructuredCodec<CrdtData<K, S>> codec = tuple(CrdtData::new,
-				CrdtData::getKey, descriptor.getKeyCodec(),
-				CrdtData::getState, descriptor.getStateCodec());
 		RoutingServlet servlet = RoutingServlet.create()
 				.map(POST, "/", loadBody()
 						.serve(request -> {
 							ByteBuf body = request.getBody();
 							try {
-								K key = JsonUtils.fromJson(keyCodec, body.getString(UTF_8));
+								K key = JsonUtils.fromJson(descriptor.getKeyManifest(), body.getString(UTF_8));
 								S state = client.get(key);
 								if (state != null) {
 									return Promise.of(HttpResponse.ok200()
-											.withBody(JsonUtils.toJson(stateCodec, state).getBytes(UTF_8)));
+											.withBody(JsonUtils.toJson(descriptor.getStateManifest(), state).getBytes(UTF_8)));
 								}
 								return Promise.of(HttpResponse.ofCode(404)
 										.withBody(("Key '" + key + "' not found").getBytes(UTF_8)));
@@ -85,7 +79,7 @@ public abstract class CrdtHttpModule<K extends Comparable<K>, S> extends Abstrac
 						.serve(request -> {
 							ByteBuf body = request.getBody();
 							try {
-								client.put(JsonUtils.fromJson(codec, body.getString(UTF_8)));
+								client.put(JsonUtils.fromJson(crdtDataManifest, body.getString(UTF_8)));
 								return Promise.of(HttpResponse.ok200());
 							} catch (MalformedDataException e) {
 								return Promise.ofException(HttpError.ofCode(400, e));
@@ -95,7 +89,7 @@ public abstract class CrdtHttpModule<K extends Comparable<K>, S> extends Abstrac
 						.serve(request -> {
 							ByteBuf body = request.getBody();
 							try {
-								K key = JsonUtils.fromJson(keyCodec, body.getString(UTF_8));
+								K key = JsonUtils.fromJson(descriptor.getKeyManifest(), body.getString(UTF_8));
 								if (client.remove(key)) {
 									return Promise.of(HttpResponse.ok200());
 								}

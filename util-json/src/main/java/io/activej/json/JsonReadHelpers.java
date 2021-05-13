@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Map;
 
+import static com.dslplatform.json.JsonWriter.SEMI;
 import static java.util.function.Function.identity;
 import static java.util.stream.Collectors.toMap;
 
@@ -61,7 +62,7 @@ public final class JsonReadHelpers {
 			startObject(reader);
 
 			String type = reader.readString();
-			if (reader.getNextToken() != ':') {
+			if (reader.getNextToken() != SEMI) {
 				throw ParsingException.create("':' expected after object key", true);
 			}
 

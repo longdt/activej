@@ -31,8 +31,8 @@ import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 
 public final class JsonUtils {
-	private static final DslJson<?> DSL_JSON = new DslJson<>(Settings.withRuntime().includeServiceLoader());
-	private static final ThreadLocal<JsonWriter> WRITERS = ThreadLocal.withInitial(DSL_JSON::newWriter);
+	public static final DslJson<?> DSL_JSON = new DslJson<>(Settings.withRuntime().includeServiceLoader());
+	public static final ThreadLocal<JsonWriter> WRITERS = ThreadLocal.withInitial(DSL_JSON::newWriter);
 
 	public static <T> String toJson(@Nullable T object) {
 		if (object == null) return "null";

@@ -19,7 +19,7 @@
   <dependencies>
     <dependency>
       <groupId>io.activej</groupId>
-      <artifactId>activej-codec</artifactId>
+      <artifactId>activej-json</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>

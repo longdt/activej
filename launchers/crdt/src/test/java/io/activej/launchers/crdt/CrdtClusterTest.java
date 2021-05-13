@@ -1,7 +1,6 @@
 package io.activej.launchers.crdt;
 
-import io.activej.codec.StructuredCodec;
-import io.activej.codec.json.JsonUtils;
+import io.activej.common.reflection.TypeT;
 import io.activej.config.Config;
 import io.activej.crdt.CrdtData;
 import io.activej.crdt.CrdtStorageClient;
@@ -17,6 +16,7 @@ import io.activej.http.HttpRequest;
 import io.activej.inject.annotation.Provides;
 import io.activej.inject.module.AbstractModule;
 import io.activej.inject.module.Module;
+import io.activej.json.JsonUtils;
 import io.activej.promise.Promises;
 import io.activej.promise.jmx.PromiseStats;
 import io.activej.test.rules.ActivePromisesRule;
@@ -33,7 +33,6 @@ import java.time.Duration;
 import java.util.concurrent.Executor;
 import java.util.stream.IntStream;
 
-import static io.activej.codec.StructuredCodecs.*;
 import static io.activej.config.converter.ConfigConverters.ofExecutor;
 import static io.activej.config.converter.ConfigConverters.ofPath;
 import static io.activej.http.HttpMethod.PUT;
@@ -88,10 +87,8 @@ public final class CrdtClusterTest {
 							TimestampContainer.createCrdtFunction(Integer::max),
 							new CrdtDataSerializer<>(UTF8_SERIALIZER,
 									TimestampContainer.createSerializer(INT_SERIALIZER)),
-							STRING_CODEC,
-							tuple(TimestampContainer::new,
-									TimestampContainer::getTimestamp, LONG_CODEC,
-									TimestampContainer::getState, INT_CODEC));
+							TypeT.of(String.class),
+							new TypeT<TimestampContainer<Integer>>() {});
 				}
 
 				@Provides
@@ -161,10 +158,8 @@ public final class CrdtClusterTest {
 						TimestampContainer.createCrdtFunction(Integer::max),
 						new CrdtDataSerializer<>(UTF8_SERIALIZER,
 								TimestampContainer.createSerializer(INT_SERIALIZER)),
-						STRING_CODEC,
-						tuple(TimestampContainer::new,
-								TimestampContainer::getTimestamp, LONG_CODEC,
-								TimestampContainer::getState, INT_CODEC));
+						TypeT.of(String.class),
+						new TypeT<TimestampContainer<Integer>>() {});
 			}
 		}.launch(new String[0]);
 	}
@@ -175,14 +170,12 @@ public final class CrdtClusterTest {
 
 		PromiseStats uploadStat = PromiseStats.create(Duration.ofSeconds(5));
 
-		StructuredCodec<CrdtData<String, Integer>> codec = tuple(CrdtData::new,
-				CrdtData::getKey, STRING_CODEC,
-				CrdtData::getState, INT_CODEC);
+		TypeT<CrdtData<String, Integer>> manifest = new TypeT<CrdtData<String, Integer>>() {};
 
 		Promises.sequence(IntStream.range(0, 1_000_000)
 				.mapToObj(i ->
 						() -> client.request(HttpRequest.of(PUT, "http://127.0.0.1:7000")
-								.withBody(JsonUtils.toJson(codec, new CrdtData<>("value_" + i, i)).getBytes(UTF_8)))
+								.withBody(JsonUtils.toJson(manifest, new CrdtData<>("value_" + i, i)).getBytes(UTF_8)))
 								.toVoid()))
 				.whenException(Throwable::printStackTrace)
 				.whenComplete(uploadStat.recordStats())
