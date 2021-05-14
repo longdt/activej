@@ -38,6 +38,7 @@ import io.activej.jmx.stats.EventStats;
 import io.activej.jmx.stats.ExceptionStats;
 import io.activej.net.socket.tcp.AsyncTcpSocket;
 import io.activej.net.socket.tcp.AsyncTcpSocketNio;
+import io.activej.net.socket.tcp.AsyncTcpSocketSsl;
 import io.activej.promise.Promise;
 import io.activej.promise.SettablePromise;
 import org.jetbrains.annotations.NotNull;
@@ -475,6 +476,14 @@ public final class AsyncHttpClient implements IAsyncHttpClient, IAsyncWebSocketC
 
 		HttpClientConnection keepAliveConnection = takeKeepAliveConnection(address);
 		if (keepAliveConnection != null) {
+			if (CHECK) {
+				if (keepAliveConnection.socket instanceof AsyncTcpSocketSsl) {
+					checkArgument(request.getProtocol().isSecure(), "Sending unsecure request to a secure endpoint");
+				} else if (keepAliveConnection.socket instanceof AsyncTcpSocketNio) {
+					checkArgument(!request.getProtocol().isSecure(), "Sending secure request to unsecure endpoint");
+				}
+			}
+
 			if (isWebSocket) {
 				return keepAliveConnection.sendWebSocketRequest(request);
 			} else {
